@@ -1,0 +1,18 @@
+# Rust build artefacts
+miner/target/
+
+# Python
+__pycache__/
+*.pyc
+
+# Your own settings and logs. Settings.cfg holds your username and your
+# base64-encoded mining key, so it must never be committed.
+Settings.cfg
+*.log
+
+# arduino-cli leaves build caches inside sketch folders
+build/
+sketch_build/
+
+# scratch output of gen_asm.py when run without an output path
+rounds_body.inc

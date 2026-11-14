@@ -1,0 +1,10 @@
+[package]
+name = "duco-miner"
+version = "1.0.0"
+edition = "2021"
+description = "Duino-Coin AVR board miner - pool protocol and serial driver rewritten in Rust"
+
+[dependencies]
+
+[profile.release]
+opt-level = 3

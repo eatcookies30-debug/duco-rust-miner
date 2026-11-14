@@ -1,0 +1,15 @@
+# Copy this to Settings.cfg (the same format the official Duino-Coin AVR Miner
+# uses) and fill in your details. The miner reads it with --config Settings.cfg.
+# Do not commit the file you create: it contains your mining key.
+[AVR Miner]
+username = your-duino-coin-username
+avrport = /dev/ttyACM0,/dev/ttyACM1
+donate = 0
+language = english
+identifier = Mega 2560,Mega 2560
+debug = n
+soc_timeout = 30
+avr_timeout = 60
+discord_presence = n
+periodic_report = 300
+mining_key = None

@@ -571,9 +571,11 @@ fn mine_board(
             return 0.0;
         }
     };
-    let motd = p.motd();
-    println!("board {port}: node says: {motd}");
-
+    // No MOTD request here on purpose: the greeting is not newline-terminated,
+    // so waiting for it idles the socket long enough for the node to drop the
+    // connection, which then costs the first job request. The node name comes
+    // from the pool picker and is printed by mine(); --ping still asks for the
+    // greeting because that is what it is for.
     let mut last_rate = 0.0;
     let mut pool_fails = 0u32;
     let mut round = 0u32;

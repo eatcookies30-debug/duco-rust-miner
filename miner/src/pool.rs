@@ -6,7 +6,10 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
 pub const SEPARATOR: &str = ",";
-pub const MINER_NAME: &str = "Duino-Coin AVR Miner (Rust) 1.0";
+pub const MINER_NAME: &str = concat!(
+    "Duino-Coin AVR Miner (Rust) ",
+    env!("CARGO_PKG_VERSION")
+);
 
 pub struct Pool {
     pub host: String,

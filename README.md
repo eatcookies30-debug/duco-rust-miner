@@ -321,7 +321,7 @@ scripts/               flash.sh, set-mining-key.sh, balance.sh
 Settings.cfg.example   template for the official-format config file
 ```
 
-## Limitations, honestly stated
+## Limitations
 
 * The core is AVR assembly. It has only been run on Mega 2560 boards; the
   generator emits instructions any AVR should execute, but only the AVR toolchain

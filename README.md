@@ -85,13 +85,21 @@ shifter, so `rotl5` is unavoidably a 20-instruction `rol` chain.
 
 ## Requirements
 
-* An Arduino Mega 2560 (the sketch also compiles for other AVR boards; the core
-  is plain AVR assembly). ATmega328P works too but is slower.
+* An Arduino **Mega 2560**. The optimised cores are fully unrolled, so they need
+  a board with room in program flash - they take 37,928 B on a Mega 2560 (14% of
+  its 253,952 B). They **do not fit on an Uno, Nano or Pro Mini** (32,256 B total;
+  the assembly core needs 37,324 B and the C core 35,592 B, measured with
+  arduino-cli 1.4.1). On a 328P board use `firmware/official_sketch` (13,072 B),
+  which is the stock 4.3 code and runs at about 340 H/s there.
 * [`arduino-cli`](https://arduino.github.io/arduino-cli/installation/) to flash
   (the Arduino IDE works as well - open `firmware/asm_sketch/asm_sketch.ino`).
 * Rust 1.70+ to build the miner. No crates, no network access needed to build.
 * Python 3 only for the generator and the verification scripts, and for the two
   helper scripts. No third-party packages.
+* Linux is the platform everything here was tested on. The miner itself is plain
+  std Rust, so it should work wherever a serial device can be opened by path
+  (on macOS that is `/dev/tty.usbmodem*`, on Windows the `COM` ports are not
+  openable that way - use the official Python miner on Windows).
 
 ## Quick start
 
@@ -265,6 +273,17 @@ plausible way to get a board that hashes silently wrong:
 
 ## Troubleshooting
 
+* **"Sketch uses 37324 bytes (115%) of program storage space"** - the optimised
+  cores are fully unrolled and do not fit on an ATmega328P board (Uno, Nano, Pro
+  Mini). Flash `firmware/official_sketch` on those boards instead; the assembly
+  and C cores are for boards with at least 64 KB of program flash.
+* **"Permission denied" opening `/dev/ttyACM0`** - serial ports belong to the
+  `dialout` group on most Linux distros:
+
+  ```bash
+  sudo usermod -aG dialout "$USER"   # then log out and back in
+  ```
+
 * **"no reply from /dev/ttyACMx within Ns"** - the board was given a job and did
   not answer. The miner responds by reopening the port, which resets the sketch.
   If it happens to every board at once, the pool node is usually the cause, not
@@ -310,6 +329,36 @@ Settings.cfg.example   template for the official-format config file
   fixable from the miner side.
 * `Settings.cfg` stores the mining key base64-encoded. That is not safe to share;
   it is gitignored for that reason.
+
+## Is a custom miner allowed?
+
+The code is MIT licensed and the official Duino-Coin README lists community
+miners, so publishing a fork is fine. Their terms of service are less clear-cut
+about running one: they "recommend using only the official or verified mining
+programs", and state that "attempting to create your own mining software, or
+modifying an official program may lead to account suspension or banning ... if a
+modified program were to have an issue". Community software is explicitly allowed
+as long as it complies with the rules.
+
+What actually gets accounts flagged, and what this project does not do:
+
+* **reporting a hashrate the hardware cannot produce.** The number submitted is
+  the board's own nonce count divided by the elapsed microseconds it printed,
+  exactly the calculation `AVR_Miner.py` does, and the miner checks
+  `sha1(prevHash + nonce) == expectedHash` locally before submitting.
+* **using a difficulty tier the hardware is not suited for** - the terms forbid
+  emulating a differently powered device. The tier here is derived from the
+  measured hashrate with the same thresholds the official AVR miner uses
+  (> 1000 H/s `DUE`, > 550 `ARM`, > 380 `MEGA`, otherwise `AVR`), and since the
+  2025 pool migration the node assigns difficulty dynamically from the hashrate
+  it measures, so the tier string is only a hint.
+* **spamming the pool or exceeding the miner allowance.** One socket per board,
+  reused until the node closes it, reconnect instead of a new connection, no
+  second instance (lock file per port set), and a mining key so nobody else can
+  mine under the username.
+
+I have asked the Duino-Coin Discord for a definitive reading of these rules and
+will update this section when they reply.
 
 ## License
 

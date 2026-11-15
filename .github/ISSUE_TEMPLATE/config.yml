@@ -1,0 +1,4 @@
+contact_links:
+  - name: Duino-Coin Discord
+    url: https://discord.gg/kvBkccy
+    about: Pool nodes, rewards, difficulty tiers, account warnings and bans are handled by the Duino-Coin team there - not in this repository.

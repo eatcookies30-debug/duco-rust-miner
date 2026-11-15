@@ -11,7 +11,7 @@ core = gen_asm.body()
 asm = "".join('        "%s\\n"\n' % l for l in core)
 clobbers = ", ".join('"r%d"' % n for n in list(range(2, 28)) + [30, 31])
 
-rot = """/* generated trace core - do not edit by hand */
+rot = """/* generated trace core - do not edit directly */
 extern "C" {
   uint8_t TRACE[71 * 20] __attribute__((used));
   __attribute__((naked, used)) void duco_rounds_trace(void) {

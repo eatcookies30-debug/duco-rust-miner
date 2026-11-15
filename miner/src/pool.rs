@@ -1,5 +1,6 @@
 //! Pool client: node discovery over plain HTTP and the line protocol on the
-//! pool socket. No external crates, so the JSON is pulled out by hand.
+//! pool socket. No external crates, so the JSON is parsed with string
+//! operations rather than a parser library.
 
 use std::io::{Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};

@@ -11,7 +11,7 @@ extern "C" {
   uint32_t HE __attribute__((used));
 }
 
-/* generated trace core - do not edit by hand */
+/* generated trace core - do not edit directly */
 extern "C" {
   uint8_t TRACE[71 * 20] __attribute__((used));
   __attribute__((naked, used)) void duco_rounds_trace(void) {

@@ -12,7 +12,7 @@ labels: bug
 
 Describe what you expected and what actually happened.
 
-**What I ran**
+**What was run**
 
 ```
 exact command line, including the flags

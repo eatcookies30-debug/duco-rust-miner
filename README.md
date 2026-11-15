@@ -148,9 +148,14 @@ flags:
 | `--bench` | hashrate benchmark straight against the boards, no network, no account |
 | `--mock` | run a fake pool node on 127.0.0.1:7913 and mine against it - tests the whole protocol without an account |
 | `--ping` | print the pool node the picker gives you and its greeting round trip |
+| `--version` / `-V` | print the miner version (put it in bug reports) |
 | `DUCO_DEBUG=1` | dump the raw bytes the boards send, with timestamps, to stderr |
 
-`DUCO_MINING_KEY=<key>` is read from the environment too.
+`DUCO_MINING_KEY=<key>` is read from the environment too. `Settings.cfg` keys
+that are honoured: `username`, `avrport`, `mining_key`, `identifier` (the rig
+identifier sent with each share, one per board), `periodic_report`,
+`avr_timeout` (how long a board has to answer one job) and `soc_timeout` (how
+long the pool socket has to answer one request).
 
 ## The mining key
 

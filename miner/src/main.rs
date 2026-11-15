@@ -23,6 +23,9 @@ struct Config {
     board_timeout: Duration,
     pool_timeout: Duration,
     rounds: u32,
+    // Rig identifiers from Settings.cfg `identifier = ...`, one per board.
+    // Sent with every share, the same way the official AVR miner does.
+    identifiers: Vec<String>,
     mock: bool,
     mock_bind: String,
     mock_port: u16,
@@ -140,7 +143,7 @@ fn usage() {
     println!(
         "usage: duco-miner [--config Settings.cfg] [--user NAME] [--key KEY] \
                  [--ports /dev/ttyACM0,/dev/ttyACM1] [--pool ip:port] \
-                 [--report-time SECS] [--board-timeout SECS] [--rounds N]\n\
+                 [--report-time SECS] [--board-timeout SECS] [--rounds N] [--version]\n\
         \n\
         offline helpers:\n\
         \x20 duco-miner --mock                    mock pool node + miner, no account needed\n\
@@ -165,6 +168,7 @@ fn parse_args() -> Result<Config, String> {
         mock_port: 7913,
         bench: false,
         ping: false,
+        identifiers: Vec::new(),
         tier: None,
     };
 
@@ -223,6 +227,13 @@ fn parse_args() -> Result<Config, String> {
             "--mock" => cfg.mock = true,
             "--bench" => cfg.bench = true,
             "--ping" => cfg.ping = true,
+            "--version" | "-V" => {
+                println!(
+                    "duco-miner {} - DUCO-S1 AVR miner, Rust standard library only",
+                    env!("CARGO_PKG_VERSION")
+                );
+                std::process::exit(0);
+            }
             "help" | "--help" | "-h" => {
                 usage();
                 std::process::exit(0);
@@ -252,6 +263,7 @@ fn apply_config(cfg: &mut Config, path: &str) -> Result<(), String> {
         match k.trim() {
             "username" => cfg.user = v.to_string(),
             "avrport" => cfg.ports = v.split(',').map(|s| s.trim().to_string()).collect(),
+            "identifier" => cfg.identifiers = v.split(',').map(|s| s.trim().to_string()).collect(),
             "mining_key" => cfg.key = normalise_key(v),
             "report_time" | "periodic_report" => cfg.report_time = v.parse().unwrap_or(60),
             "avr_timeout" => {
@@ -516,6 +528,15 @@ fn mine_board(
     totals: &Arc<Mutex<Totals>>,
     node: (String, u16, String),
 ) -> f64 {
+    // The rig identifier the official miner sends with each share. If Settings.cfg
+    // has one for this board we use it, otherwise a stable per-port name.
+    let rigid = cfg
+        .identifiers
+        .get(idx)
+        .filter(|s| !s.is_empty())
+        .cloned()
+        .unwrap_or_else(|| format!("rust-miner-{port}"));
+
     let mut b = match Board::open(port, cfg.board_timeout) {
         Ok(b) => b,
         Err(e) => {
@@ -622,7 +643,7 @@ fn mine_board(
                 last_rate = rate;
                 totals.lock().unwrap().per_board[idx] = rate;
 
-                let feedback = match p.submit(nonce, rate, &format!("rust-miner-{idx}"), &ducoid) {
+                let feedback = match p.submit(nonce, rate, &rigid, &ducoid) {
                     Ok(f) => f,
                     Err(e) => {
                         println!("board {port}: submit failed: {e}");

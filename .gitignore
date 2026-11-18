@@ -16,3 +16,6 @@ sketch_build/
 
 # scratch output of gen_asm.py when run without an output path
 rounds_body.inc
+
+# the desktop I2C glue test is built in place
+firmware/i2c_slave_test/slave_test

@@ -172,7 +172,8 @@ uint32_t duco_mine(const char *prevHash, const uint8_t *target, uint32_t maxNonc
       }
     }
   }
-  /* 5 digits: 10000..99999 (the highest difficulty the protocol allows) */
+  /* 5 digits: 10000..99999. The protocol caps difficulty at 655, so the nonce
+     range never reaches six digits and there is no generic fallback path. */
   if (maxNonce > 10000) {
     MSG[12] = MSG[13] = MSG[14] = 0;
     MSG[15] = len_word(45);
@@ -198,13 +199,15 @@ uint32_t duco_mine(const char *prevHash, const uint8_t *target, uint32_t maxNonc
   }
 
   /* Longer nonces cannot occur with the DUCO-S1a difficulty range, but the
-     generic path keeps the routine correct for any input. */
+     generic path keeps the routine correct for any input. The buffers are
+     static: a stack frame would put the frame pointer in r28:r29, which the
+     compact assembly core uses for part of the SHA-1 state. */
   if (maxNonce > 100000) {
+    static char dig[11];
+    static char tmp[11];
     for (uint32_t v = 100000; v < maxNonce; v++) {
-      char dig[11];
       int len = 0;
       uint32_t x = v;
-      char tmp[11];
       int n = 0;
       while (x) { tmp[n++] = char('0' + x % 10); x /= 10; }
       while (n) dig[len++] = tmp[--n];

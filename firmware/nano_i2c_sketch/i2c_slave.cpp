@@ -17,6 +17,18 @@
 
 #include "i2c_slave.h"
 
+/* The TWI hardware sits on A4/A5 on an ATmega328P and on digital pins 20 and
+   21 on an ATmega1280/2560. Wire talks to the hardware either way, but the
+   pull-ups have to be enabled on the pins the bus is actually on: a 328P board
+   has no external resistors on those lines, and a Mega 2560 has them onboard. */
+#if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
+#define TWI_SDA_PIN 20
+#define TWI_SCL_PIN 21
+#else
+#define TWI_SDA_PIN A4
+#define TWI_SCL_PIN A5
+#endif
+
 /* Two 40 character hashes, a difficulty and the separators fit in 100 bytes. */
 #define JOB_LIMIT 100
 /* "nonce,elapsed,DUCOID\n" - the longest value the protocol can produce. */
@@ -69,8 +81,8 @@ static uint8_t readField(char *dest, uint8_t limit, const char *job, uint8_t len
 }
 
 uint8_t i2c_begin(void) {
-  pinMode(A4, INPUT_PULLUP);
-  pinMode(A5, INPUT_PULLUP);
+  pinMode(TWI_SDA_PIN, INPUT_PULLUP);
+  pinMode(TWI_SCL_PIN, INPUT_PULLUP);
   Wire.begin();
 
   /* A transmission to a free address gets no acknowledge, so the first address
@@ -100,19 +112,20 @@ bool i2c_take_job(char *prevHash, char *targetHash, uint32_t *difficulty) {
 
   /* Only this job is consumed; anything the master sent after it stays in the
    buffer for the next pass. */
-  uint8_t len = end;
+  char job[JOB_LIMIT];
+  memcpy(job, jobIn, end);
   memmove(jobIn, jobIn + end + 1, jobLen - end - 1);
   jobLen -= end + 1;
 
   uint8_t i = 0;
-  if (readField(prevHash, 40, jobIn, len, &i) != 40) return false;
+  if (readField(prevHash, 40, job, end, &i) != 40) return false;
   prevHash[40] = 0;
-  if (readField(targetHash, 40, jobIn, len, &i) != 40) return false;
+  if (readField(targetHash, 40, job, end, &i) != 40) return false;
   targetHash[40] = 0;
 
   uint32_t d = 0;
-  while (i < len && jobIn[i] >= '0' && jobIn[i] <= '9')
-    d = d * 10u + (uint32_t)(jobIn[i++] - '0');
+  while (i < end && job[i] >= '0' && job[i] <= '9')
+    d = d * 10u + (uint32_t)(job[i++] - '0');
   *difficulty = d;
   return true;
 }

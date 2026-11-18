@@ -243,13 +243,18 @@ another Arduino instead of being plugged into a PC. The Rust miner itself talks
 USB serial only; the I2C path is for a rig master. The board side is
 `i2c_slave.h` / `i2c_slave.cpp`, the same two files in both sketches.
 
-Wire the bus like any other I2C pair:
+Wire the bus like any other I2C pair, using the TWI pins of each board:
 
 ```
-master A4 -- slave A4      (SDA)
-master A5 -- slave A5      (SCL)
-master GND -- slave GND
+ATmega328P (Nano, Uno, Pro Mini):  SDA = A4,  SCL = A5
+ATmega1280/2560 (Mega):            SDA = D20, SCL = D21
 ```
+
+SDA to SDA, SCL to SCL, ground to ground. The Mega is the trap here: its I2C
+lines are digital pins 20 and 21, not its analog A4/A5, so wiring a Mega to
+A4/A5 connects it to nothing. The glue knows which pins belong to the bus and
+puts pull-ups on them; a 328P board needs those internal pull-ups because it has
+no external resistors on the lines, and a Mega 2560 has them onboard already.
 
 At startup the board walks addresses 1 to 126 and takes the first one nobody
 acknowledges, then prints what it chose on the serial port
@@ -428,11 +433,14 @@ plausible way to get a board that hashes silently wrong:
   the hardware: the node closes a connection whose share has not arrived, and a
   board left searching a dead job looks dead for the whole allowance.
 * **Nothing answers on the I2C bus** - the two boards need a common ground, and
-  the slave takes the first address nobody acknowledges, so the number the sketch
-  prints at startup is the address to talk to. `firmware/i2c_bench` scans
-  addresses 1 to 31 only. A slave that is still searching answers every poll with
-  a newline, so a master that reads a line gets an empty one and polls again -
-  that is the reference behaviour, not a hang.
+  the two ends have to be on each board's TWI pins, which are not the same pins
+  on every board: A4/A5 on a 328P, D20/D21 on a Mega. `firmware/i2c_bench` prints
+  the pins it is using when it finds no slave. The slave takes the first address
+  nobody acknowledges, so the number the sketch prints at startup is the address
+  to talk to, and `firmware/i2c_bench` scans addresses 1 to 31 only. A slave that
+  is still searching answers every poll with a newline, so a master that reads a
+  line gets an empty one and polls again - that is the reference behaviour, not a
+  hang.
 * **"BAD Too high starting difficulty"** - normal, once per connection per board.
   The node starts the tier probe at difficulty 512 and then drops to 128; the
   first nonce found against the old target is not valid for the new one. The

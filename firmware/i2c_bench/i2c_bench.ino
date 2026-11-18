@@ -1,16 +1,19 @@
 /*
   I2C bench master.
 
-  Drives one or more mining slaves on the A4/A5 bus the way an ESP rig master
-  does, so a board's I2C path can be checked end to end without a PC-side rig:
+  Drives one or more mining slaves on the TWI bus the way an ESP rig master
+  does, so a board's I2C path can be checked end to end without a PC-side rig.
+  SDA to SDA, SCL to SCL, GND to GND:
 
-      master A4 -- slave A4     (SDA)
-      master A5 -- slave A5     (SCL)
-      master GND -- slave GND
+      ATmega328P (Uno, Nano, Pro Mini)  SDA = A4, SCL = A5
+      ATmega1280/2560 (Mega)            SDA = D20, SCL = D21
 
-  Run it on any Arduino (a Mega 2560 or an Uno is fine). Open the serial
-  monitor at 115200: it lists every slave that answers, sends each one a job
-  whose nonce is known in advance, and prints the share the slave returns.
+  The TWI hardware is on different pins on the two families, so a Mega wired to
+  its analog A4/A5 is connected to nothing.
+
+  Run it on any Arduino. Open the serial monitor at 115200: it lists every slave
+  that answers, sends each one a job whose nonce is known in advance, and prints
+  the share the slave returns.
 
   The protocol is the one from https://github.com/ricaun/DuinoCoinI2C: the job
   goes out one byte per transmission, the answer comes back one byte per poll,
@@ -18,6 +21,14 @@
 */
 
 #include <Wire.h>
+
+#if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
+#define TWI_SDA_PIN 20
+#define TWI_SCL_PIN 21
+#else
+#define TWI_SDA_PIN A4
+#define TWI_SCL_PIN A5
+#endif
 
 #define BUS_SCAN_LIMIT 32
 #define POLL_TIMEOUT_MS 60000
@@ -61,14 +72,7 @@ static void read_line(uint8_t address, char *out, uint8_t limit) {
   out[n] = 0;
 }
 
-void setup() {
-  Serial.begin(115200);
-  while (!Serial)
-    ;
-
-  Wire.begin();
-  Wire.setClock(100000);
-
+static void run_test(void) {
   char job[128];
   snprintf(job, sizeof(job), "%s,%s,%u\n", PREV_HASH, TARGET_HASH, DIFFICULTY);
 
@@ -109,7 +113,31 @@ void setup() {
     Serial.println(nonce == EXPECTED_NONCE ? " OK" : " MISMATCH");
   }
 
-  if (!found) Serial.println("No slave answered. Check the A4/A5/GND wiring.");
+  if (!found) {
+    Serial.println("No slave answered. Check SDA to SDA, SCL to SCL and GND to GND.");
+    Serial.print("On this board the bus is on pin ");
+    Serial.print(TWI_SDA_PIN);
+    Serial.print(" (SDA) and pin ");
+    Serial.print(TWI_SCL_PIN);
+    Serial.println(" (SCL).");
+  }
 }
 
-void loop() {}
+void setup() {
+  Serial.begin(115200);
+  while (!Serial)
+    ;
+
+  /* Weak internal pull-ups hold the lines from floating when only two boards
+     share the bus and there are no external resistors. */
+  pinMode(TWI_SDA_PIN, INPUT_PULLUP);
+  pinMode(TWI_SCL_PIN, INPUT_PULLUP);
+
+  Wire.begin();
+  Wire.setClock(100000);
+}
+
+void loop() {
+  run_test();
+  delay(20000);
+}

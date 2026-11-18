@@ -17,6 +17,18 @@
 
 #include "i2c_slave.h"
 
+/* The TWI hardware sits on A4/A5 on an ATmega328P and on digital pins 20 and
+   21 on an ATmega1280/2560. Wire talks to the hardware either way, but the
+   pull-ups have to be enabled on the pins the bus is actually on: a 328P board
+   has no external resistors on those lines, and a Mega 2560 has them onboard. */
+#if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__)
+#define TWI_SDA_PIN 20
+#define TWI_SCL_PIN 21
+#else
+#define TWI_SDA_PIN A4
+#define TWI_SCL_PIN A5
+#endif
+
 /* Two 40 character hashes, a difficulty and the separators fit in 100 bytes. */
 #define JOB_LIMIT 100
 /* "nonce,elapsed,DUCOID\n" - the longest value the protocol can produce. */
@@ -69,8 +81,8 @@ static uint8_t readField(char *dest, uint8_t limit, const char *job, uint8_t len
 }
 
 uint8_t i2c_begin(void) {
-  pinMode(A4, INPUT_PULLUP);
-  pinMode(A5, INPUT_PULLUP);
+  pinMode(TWI_SDA_PIN, INPUT_PULLUP);
+  pinMode(TWI_SCL_PIN, INPUT_PULLUP);
   Wire.begin();
 
   /* A transmission to a free address gets no acknowledge, so the first address

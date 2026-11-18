@@ -33,6 +33,7 @@ typedef uint32_t uintDiff;
 #include "uniqueID.h"
 
 #include "duco_hash.h"
+#include "i2c_slave.h"
 
 String get_DUCOID() {
   String ID = "DUCOID";
@@ -46,6 +47,10 @@ String get_DUCOID() {
 
 String DUCOID = "";
 
+/* Job buffers for the rig path; the serial path reads its own line. */
+static char wirePrevHash[41];
+static char wireTargetHash[41];
+
 void setup() {
   // Prepare built-in led pin as output
   pinMode(LED_BUILTIN, OUTPUT);
@@ -56,6 +61,13 @@ void setup() {
   while (!Serial)
     ;  // For Arduino Leonardo or any board with the ATmega32U4
   Serial.flush();
+
+  // Join an I2C mining rig if one is on the bus (see i2c_slave.h)
+  uint8_t address = i2c_begin();
+  if (address) {
+    Serial.print("I2C slave address: ");
+    Serial.println(address);
+  }
 }
 
 void lowercase_hex_to_bytes(char const * hexDigest, uint8_t * rawDigest) {
@@ -86,6 +98,14 @@ uintDiff ducos1a(char const * prevBlockHash, char const * targetBlockHash, uintD
 }
 
 void loop() {
+  // A job pushed by the rig master over I2C is answered over the same bus.
+  uint32_t wireDifficulty;
+  if (i2c_take_job(wirePrevHash, wireTargetHash, &wireDifficulty)) {
+    uint32_t wireStart = micros();
+    uint32_t wireNonce = ducos1a(wirePrevHash, wireTargetHash, wireDifficulty);
+    i2c_submit(wireNonce, micros() - wireStart, DUCOID.c_str());
+  }
+
   // Wait for serial data
   if (Serial.available() <= 0) {
     return;

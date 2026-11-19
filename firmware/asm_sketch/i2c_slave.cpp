@@ -29,15 +29,20 @@
 #define TWI_SCL_PIN A5
 #endif
 
-/* Two 40 character hashes, a difficulty and the separators fit in 100 bytes. */
-#define JOB_LIMIT 100
+/* Two 40 character hashes, a difficulty and the separators come to 86 bytes.
+   Room for two of them matters: a master that pushes a new job while the board
+   is still searching the previous one needs somewhere to put it. The buffer is
+   indexed by wrapping 8 bit positions, so its size is a power of two. */
+#define JOB_LIMIT 256
 /* "nonce,elapsed,DUCOID\n" - the longest value the protocol can produce. */
 #define RESP_LIMIT 48
 #define FIRST_ADDRESS 1
 #define LAST_ADDRESS 127
 
 static char jobIn[JOB_LIMIT];
-static volatile uint8_t jobLen;
+static volatile uint8_t jobHead;    /* where the interrupt writes next */
+static volatile uint8_t jobTail;    /* first byte the main loop has not taken yet */
+static volatile uint8_t jobOverflow;
 
 static char reply[RESP_LIMIT];
 static volatile uint8_t replyLen;
@@ -46,7 +51,15 @@ static volatile uint8_t replyNext;
 void receiveEvent(int count) {
   while (count-- > 0) {
     char c = Wire.read();
-    if (jobLen < JOB_LIMIT - 1) jobIn[jobLen++] = c;
+    if ((uint8_t)(jobHead - jobTail) >= JOB_LIMIT - 1) {
+      /* The buffer filled before the main loop could take a job out of it. A
+         half stored job would splice onto the bytes that follow and be parsed as
+         a job with the wrong hashes, so nothing in it is read until the main
+         loop clears it, and the next newline starts clean. */
+      jobOverflow = 1;
+      continue;
+    }
+    jobIn[jobHead++] = c;
   }
 }
 
@@ -66,18 +79,20 @@ static uint8_t appendDecimal(char *out, uint8_t pos, uint32_t value) {
   return pos;
 }
 
-/* Copy one comma separated field into dest, stopping at the comma or the end
-   of the job, and step *i past the separators. Returns how many characters the
-   field held. */
-static uint8_t readField(char *dest, uint8_t limit, const char *job, uint8_t len,
-                         uint8_t *i) {
-  uint8_t n = 0;
-  while (*i < len && job[*i] != ',') {
-    if (n < limit) dest[n++] = job[*i];
-    (*i)++;
+/* Copy one comma separated field into dest, stopping at the comma or at the end
+   of the job, and step *pos past the separators. The job is read out of the
+   ring buffer, so a field is addressed as base + offset. Returns how many
+   characters the field held, even if it was longer than dest. */
+static uint8_t readField(char *dest, uint8_t limit, const char *job, uint8_t base,
+                         uint8_t len, uint8_t *pos) {
+  uint8_t n = 0, total = 0;
+  while (*pos < len && job[(uint8_t)(base + *pos)] != ',') {
+    if (n < limit) dest[n++] = job[(uint8_t)(base + *pos)];
+    total++;
+    (*pos)++;
   }
-  while (*i < len && job[*i] == ',') (*i)++;
-  return n;
+  while (*pos < len && job[(uint8_t)(base + *pos)] == ',') (*pos)++;
+  return total;
 }
 
 uint8_t i2c_begin(void) {
@@ -106,26 +121,44 @@ uint8_t i2c_begin(void) {
 }
 
 bool i2c_take_job(char *prevHash, char *targetHash, uint32_t *difficulty) {
-  uint8_t end = 0;
-  while (end < jobLen && jobIn[end] != '\n') end++;
-  if (end == jobLen) return false;
+  if (jobOverflow) {
+    jobOverflow = 0;
+    jobTail = jobHead;
+  }
 
-  /* Only this job is consumed; anything the master sent after it stays in the
-   buffer for the next pass. */
-  char job[JOB_LIMIT];
-  memcpy(job, jobIn, end);
-  memmove(jobIn, jobIn + end + 1, jobLen - end - 1);
-  jobLen -= end + 1;
+  /* Snapshot how much of the job the interrupt has handed over. It keeps
+     appending while this scans, and comparing the scan position against a length
+     that has grown since the scan started is what makes a job still in transit
+     look like a whole job: the scan runs off the end of the snapshot, the length
+     moves on, and the incomplete bytes get read as a job whose hashes are short.
+     */
+  uint8_t tail = jobTail;
+  uint8_t head = jobHead;
+  uint8_t end = tail;
+  while (end != head && jobIn[end] != '\n') end++;
+  if (end == head) return false;
 
-  uint8_t i = 0;
-  if (readField(prevHash, 40, job, end, &i) != 40) return false;
-  prevHash[40] = 0;
-  if (readField(targetHash, 40, job, end, &i) != 40) return false;
-  targetHash[40] = 0;
+  uint8_t len = (uint8_t)(end - tail);
+  uint8_t pos = 0;
+  uint8_t prevLen = readField(prevHash, 40, jobIn, tail, len, &pos);
+  uint8_t targetLen = readField(targetHash, 40, jobIn, tail, len, &pos);
 
   uint32_t d = 0;
-  while (i < end && job[i] >= '0' && job[i] <= '9')
-    d = d * 10u + (uint32_t)(job[i++] - '0');
+  uint8_t digits = 0;
+  while (pos < len && jobIn[(uint8_t)(tail + pos)] >= '0' &&
+         jobIn[(uint8_t)(tail + pos)] <= '9') {
+    d = d * 10u + (uint32_t)(jobIn[(uint8_t)(tail + pos)] - '0');
+    digits++;
+    pos++;
+  }
+
+  /* Only this job is consumed; anything the master sent after it stays in the
+     buffer for the next pass. */
+  jobTail = (uint8_t)(end + 1);
+
+  if (prevLen != 40 || targetLen != 40 || digits == 0) return false;
+  prevHash[40] = 0;
+  targetHash[40] = 0;
   *difficulty = d;
   return true;
 }

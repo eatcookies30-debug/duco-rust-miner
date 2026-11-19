@@ -27,12 +27,13 @@ reports for the sketch as it is in this repo.
 |---|---|---|---|---|
 | `firmware/official_sketch` (stock 4.3) | Mega 2560 | 13,670 B | 338 | 1.00x |
 | `firmware/c_core` (optimised C) | Mega 2560 | 36,196 B | 1,239 | 3.66x |
-| `firmware/asm_sketch` (assembly core) | Mega 2560 | 40,160 B | **1,824** | **5.40x** |
+| `firmware/asm_sketch` (assembly core) | Mega 2560 | 40,144 B | **1,824** | **5.40x** |
 | `firmware/official_sketch` (stock 4.3) | Nano 328P | 13,072 B | 340 | 1.00x |
-| `firmware/nano_i2c_sketch` (looped core) | Nano 328P | 25,646 B | **1,759** | **5.17x** |
+| `firmware/nano_i2c_sketch` (looped core) | Nano 328P | 25,714 B | **1,759** | **5.17x** |
 
-The I2C glue is the same code in both sketches and costs 2,232 B on a Mega
-(37,928 B without it).
+The I2C glue is the same code in both sketches and costs 2,216 B on a Mega
+(37,928 B without it). Driven over the I2C bus rather than USB serial, the same
+Nano sketch measures 1,590 H/s, which is 4.68x the stock sketch on that board.
 
 Typical bench output for the assembly core on a Mega:
 
@@ -123,11 +124,11 @@ call from a function with local variables.
 
 ## Requirements
 
-* A board. `firmware/asm_sketch` is for a **Mega 2560** (40,160 B, 15% of its
+* A board. `firmware/asm_sketch` is for a **Mega 2560** (40,144 B, 15% of its
   253,952 B of program flash) or any AVR with 64 KB or more.
   `firmware/nano_i2c_sketch` is for an **ATmega328P** board - Nano, Uno,
-  Pro Mini - where the looped core takes 25,646 B (83% of a Nano's 30,720 B,
-  79% of an Uno's 32,256 B) and 1,330 B of the 2,048 B of RAM.
+  Pro Mini - where the looped core takes 25,714 B (83% of a Nano's 30,720 B,
+  80% of an Uno's 32,256 B) and 1,488 B of the 2,048 B of RAM.
   The unrolled core does not fit in a 328P: on its own it is 30,708 B, and with
   the Wire library in the sketch the build fails with
   `text section exceeds available space in board`.
@@ -274,33 +275,68 @@ Note that the reply is **decimal** over I2C and **binary** on the serial port.
 That is what the reference rig implementations do, and it is why the Rust miner
 (serial) and an ESP rig master (I2C) read the same field differently.
 
+### Keeping the job buffer safe
+
+Two things the glue has to get right, because both are easy to get wrong in a way
+that makes a board look dead rather than slow:
+
+* **the master keeps pushing while the board is still searching.** The job buffer
+  is a 256 byte ring, a little more than two jobs wide. `jobHead` is written only by
+  the receive interrupt and `jobTail` only by the main loop, so consuming one job
+  cannot lose the bytes of the next one. When the ring is full the interrupt
+  ignores further bytes and sets a flag, and the main loop clears the whole buffer
+  before it reads it again: a half stored job is dropped rather than spliced onto
+  the bytes that follow it, which would otherwise be parsed as a job with the
+  wrong hashes.
+* **the interrupt fills the buffer while the main loop is scanning it.** The scan
+  for a job's newline has to compare against the length it snapshotted when it
+  started. The first version compared against the live length instead, so a job
+  still in transit looked finished at the point the scan had reached, one character
+  of it was silently dropped, the hashes came out short, the job was refused, and
+  the board never answered. `firmware/i2c_slave_test` reproduces that on a desktop
+  with a second thread pushing job bytes while the scan runs: against the snapshot
+  the glue accepts all 20 jobs the thread pushes, against the live length it
+  accepts none of them.
+
 To see a real exchange without a rig, flash `firmware/i2c_bench` to a Mega or an
 Uno, wire it to a mining board as above and open the serial monitor at 115200.
 It scans addresses 1 to 31, sends each slave it finds a job whose nonce is known
 in advance, prints the reply it got back, and says OK or MISMATCH. It waits up to
-60 s for a slave to finish one search, which is longer than the two seconds a rig
-master allows before polling again. Output looks like this:
+20 s for a slave to finish one search - about 6.3 s for a Nano at difficulty 100 -
+and a slave that never answers gets the job sent again, up to three times. Each
+run repeats every 20 s and keeps running totals, so a flaky wire shows up as a
+mismatch rate rather than as one odd line. Output looks like this:
 
 ```
 Scanning the bus for slaves...
-Slave at 1: job ba29a15896fd2d792d5c4b60668bf2b9feebc51d,06c4b35738a4611b85aff1250fd22f669c27747a,100
-  reply: 9999,5685560,DUCOID12345678ABCDEF01
-  hashrate: 1759 H/s
+Slave at 1: job ba29a15896fd2d792d5c4b60668bf2b9feebc51d,3169de686edf3ec107cc21cb0d9cfce0837f34a3,100
+  reply: 9999,6286296,DUCOID0123456789ABCDEF01
+  hashrate: 1590 H/s
   nonce: 9999 OK
+Totals: 12 jobs, 12 correct, 0 wrong, 0 of 1032 job bytes the slave did not acknowledge.
 ```
+
+The job the bench sends is SHA-1(`ba29a15896fd2d792d5c4b60668bf2b9feebc51d` +
+`9999`), so a correct slave answers with 9999; the third field of the reply is the
+board's own DUCOID. Driving a Nano this way measures 1,590 H/s against 1,759 H/s
+on the same board over USB serial: the search runs in the main loop while the TWI
+interrupts serve the bus, so the difference is the cost of the polls, since the
+master has to ask for the answer one byte at a time.
 
 The job and reply handling can also be exercised on a desktop, without a board,
 with `firmware/i2c_slave_test`:
 
 ```bash
 cd firmware/i2c_slave_test
-g++ -Wall -I stub -x c++ slave_test.cpp ../asm_sketch/i2c_slave.cpp -o slave_test
+g++ -Wall -pthread -I stub -x c++ slave_test.cpp ../asm_sketch/i2c_slave.cpp -o slave_test
 ./slave_test
 ```
 
 It drives `i2c_slave.cpp` through the same sequence a master uses and checks the
-parsed job, the reply line, the newline-while-searching behaviour and the buffer
-limits.
+parsed job, the reply line, the newline-while-searching behaviour, the buffer
+limits, malformed jobs, and - with a second thread playing the receive interrupt -
+that a job is never taken before its newline has arrived. Currently 33 checks,
+0 failures.
 
 ## How the PC-side miner differs from `AVR_Miner.py`
 
@@ -476,11 +512,16 @@ Settings.cfg.example      template for the official-format config file
 * The cores are AVR assembly. They have been run on Mega 2560 and Nano 328P
   boards; the generator emits instructions any AVR should execute, but only those
   two boards are exercised here.
-* The I2C slave is compiled into both sketches, matches the reference protocol
-  and is covered by `firmware/i2c_slave_test`, but the end-to-end bus run with
-  `firmware/i2c_bench` needs a master board wired to A4/A5 with a common ground.
-  No rig was connected when this was written, so the exchange is verified at the
-  code level rather than on a physical bus.
+* The I2C slave is the community rig protocol from `ricaun/DuinoCoinI2C`, and it
+  was measured on a physical bus, not just in code: `firmware/i2c_bench` on a Mega
+  2560 drove a Nano 328P slave over D20/D21 to A4/A5 at 100 kHz for 320 s, 12 jobs
+  went out and 12 came back with the nonce the bench expects, with no job byte
+  unacknowledged and no job needing a resend (1,590 H/s on that Nano). The same
+  glue was checked with the roles swapped - bench on the Nano, Mega as the slave -
+  and 9 jobs out gave 9 correct replies at 1,637 H/s. What has not been tested is a
+  master from the reference rig implementations - ESP32, ESP8266, Raspberry Pi -
+  since the bench in this repo is its own master and the master half of a real rig
+  is somebody else's firmware.
 * The reward figures are measurements on one account over one period. Kolka's
   `reward_div` changes as the network's total hashrate changes, so the DUCO/hour
   numbers will drift; the *relative* speedups are the stable part.

@@ -10,6 +10,10 @@ A Duino-Coin AVR mining setup, in two parts:
   provided: `firmware/asm_sketch` for a Mega 2560 and
   `firmware/nano_i2c_sketch` for an ATmega328P board (Nano, Uno, Pro Mini). Both
   take jobs over USB serial and over an I2C rig bus.
+* **`firmware/tiny_core` / `firmware/tiny85`** - the same protocol for boards with
+  only 8 KB of flash, where a sketch does not fit and arduino-cli has no board
+  definition for the chip. It is plain C driven straight from the registers, so
+  it needs `avr-gcc` and `avrdude` instead of arduino-cli.
 
 Both parts talk the standard **DUCO-S1** protocol, so the pool, the difficulty
 handling, the reward and the account are exactly the same as with the official
@@ -21,7 +25,8 @@ Everything below was measured on the boards in this setup - two Mega 2560s and
 one Nano 328P - with the same benchmark (`miner --bench`, which asks each board
 for nonces 50, 9,999, 42,424 and 65,500 and reports the nonce and the elapsed
 time the board itself prints). The flash figures are what arduino-cli 1.4.1
-reports for the sketch as it is in this repo.
+reports for the sketch as it is in this repo; the bare-metal row is what
+`firmware/tiny85/build.sh atmega328p` measures with avr-gcc 7.3.0.
 
 | firmware | board | flash | H/s per board | vs stock 4.3 on the same board |
 |---|---|---|---|---|
@@ -30,10 +35,15 @@ reports for the sketch as it is in this repo.
 | `firmware/asm_sketch` (assembly core) | Mega 2560 | 40,144 B | **1,824** | **5.40x** |
 | `firmware/official_sketch` (stock 4.3) | Nano 328P | 13,072 B | 340 | 1.00x |
 | `firmware/nano_i2c_sketch` (looped core) | Nano 328P | 25,714 B | **1,759** | **5.17x** |
+| `firmware/tiny85` (bare metal, no Arduino core) | Nano 328P | 4,448 B | 763 | 2.24x |
 
 The I2C glue is the same code in both sketches and costs 2,216 B on a Mega
 (37,928 B without it). Driven over the I2C bus rather than USB serial, the same
 Nano sketch measures 1,590 H/s, which is 4.68x the stock sketch on that board.
+The bare-metal build measures 763 H/s on the same Nano over USB serial and
+727 H/s over the I2C bus; it is the firmware that would fit an 8 KB chip, and it
+is about 43% of the assembly core's speed (see
+[A core for an 8 KB board](#a-core-for-an-8-kb-board)).
 
 Typical bench output for the assembly core on a Mega:
 
@@ -122,6 +132,102 @@ r28:r29 is the pair GCC uses as the stack frame pointer, the compact core pushes
 and pops them on entry and before every return, which is what makes it safe to
 call from a function with local variables.
 
+## A core for an 8 KB board
+
+An ATmega8 or an ATtiny85 has 8 KB of program flash and 512-1,024 B of RAM, and
+the standard Arduino AVR core has no board definition for either of them:
+`boards.txt` covers the 168/328 and the 1280/2560 chips only. So there is no
+sketch to build for a chip that small, and even a skeleton sketch that searches
+with the small core, takes a job over Serial and answers on the Wire bus
+measures 5,514 B on a 328P with arduino-cli 1.4.1 before the board id, the
+timing and the reply line are added. `firmware/tiny_core` and
+`firmware/tiny85` are the firmware for those boards: the same protocol and the
+same reply line, driven from registers with no Arduino libraries, in 4,448 B -
+smaller than the skeleton sketch that only does part of the job.
+
+**The core** (`tiny_core/tiny_hash.c`) is a single looped round body:
+
+* the schedule is a **16-word rolling window** rather than 80 words. `W[i]` is
+  read back at rounds `i+3`, `i+8`, `i+14` and `i+16`, and the round that
+  overwrites slot `i & 15` is round `i+16` - the last round that word is needed
+  in - so 64 bytes of RAM is enough instead of 320;
+* rounds 0-9 depend only on the previous hash, not on the nonce, so they are
+  computed **once per job** and the search starts from that state;
+* the nonce is walked as **decimal digits** instead of being formatted every
+  attempt, so the search loop never divides;
+* the state is plain local variables, so GCC decides where it lives. On a 328P
+  it stays in registers; on an ATtiny85, which has eight registers in total, it
+  spills to RAM and the hash still runs.
+
+`check_tiny_core.py` generates test vectors with `hashlib`, runs them through the
+core, and also reports what the core costs on each chip:
+
+```bash
+cd firmware/tiny_core && python3 check_tiny_core.py
+```
+
+```
+tiny core: 408 cases checked, 0 failures
+cost of the core on AVR chips (-Os):
+  atmega328p   1946 B of code,  168 B of RAM  (of 32768 B flash, 2048 B RAM on chip)
+  atmega168p   1946 B of code,  168 B of RAM  (of 16384 B flash, 1024 B RAM on chip)
+  atmega8      1940 B of code,  168 B of RAM  (of 8192 B flash, 1024 B RAM on chip)
+  atmega16     1946 B of code,  168 B of RAM  (of 16384 B flash, 1024 B RAM on chip)
+  attiny85     1964 B of code,  168 B of RAM  (of 8192 B flash, 512 B RAM on chip)
+```
+
+**The whole miner** (`tiny85/duco_tiny.c`) is the core plus everything a sketch
+would get from the Arduino core, done from registers: a TWI slave interrupt
+handler, a UART driver, the DUCOID read out of the boot signature row, and Timer
+1 to time a search.
+
+```bash
+cd firmware/tiny85
+./build.sh                       # atmega328p, the Nano/Uno chip
+./build.sh atmega8
+./build.sh atmega328p "-DDUCO_DEBUG"     # prints every job the board parses
+```
+
+| chip | flash | RAM | |
+|---|---|---|---|
+| ATmega328P (Nano, Uno) | 4,448 B | 713 B | measured on a Nano in this setup |
+| ATmega168P | 4,448 B | 713 B | same driver as the 328P |
+| ATmega8 | 4,200 B | 729 B | 51% of an 8 KB chip, 71% of its 1 KB of RAM |
+| ATmega16 | 4,330 B | 729 B | |
+| ATtiny85 | 2,236 B | 237 B | compiles; the bus driver is compiled out, see below |
+
+There is no sketch for arduino-cli to build, so it goes on with avrdude:
+
+```bash
+avrdude -c arduino -p atmega328p -P /dev/ttyUSB0 -U flash:w:duco_tiny_atmega328p.hex
+```
+
+The board then speaks the same protocol as the sketches - `prevHash,targetHash,difficulty\n`
+in, `nonce,elapsed,DUCOID\n` out, with the nonce and the elapsed time as binary
+digits on the serial port and decimal over I2C - so the Rust miner drives it
+without any change. `--bench` against the bare-metal Nano in this setup:
+
+```
+/dev/ttyUSB0: DUCOID0123456789ABCDEF01 - test nonce 50 in 65489 us -> 763.49 H/s
+  diff 100: found nonce 9999 in 13.009329 s -> 768.60 H/s OK
+  diff 655: found nonce 42424 in 55.619646 s -> 762.75 H/s OK
+  diff 655: found nonce 65500 in 85.944262 s -> 762.12 H/s OK
+```
+
+and `firmware/i2c_bench` on a Mega drove that same bare-metal board over the bus
+for 240 s: 7 jobs sent, 7 replies with the nonce the bench expects, no job byte
+unacknowledged, 727 H/s. That is 43% of the assembly core on the same board: the
+looped C round body costs about 2.3x the cycles of the unrolled assembly one,
+which is the price of fitting in a fifth of the flash.
+
+**ATtiny85.** The core and the job handling fit with room to spare - 2,236 B of
+the 8,192 B of flash and 237 B of the 512 B of RAM - but the ATtiny85 has no TWI
+module at all: `iotnx5.h` defines no `TW*` registers, so serving the bus there
+means driving it through USI in two-wire mode, which is a different driver and
+another 1-2 KB. `build.sh attiny85` compiles with the bus driver and the UART
+compiled out. That is a fit and instruction-set check, not a board you can hand
+jobs to, and nothing here was run on ATtiny85 hardware.
+
 ## Requirements
 
 * A board. `firmware/asm_sketch` is for a **Mega 2560** (40,144 B, 15% of its
@@ -132,6 +238,10 @@ call from a function with local variables.
   The unrolled core does not fit in a 328P: on its own it is 30,708 B, and with
   the Wire library in the sketch the build fails with
   `text section exceeds available space in board`.
+* A board with 8 KB of flash - **ATmega8** or **ATmega16** - takes
+  `firmware/tiny85`, which has no Arduino core in it and so needs `avr-gcc` and
+  `avrdude` rather than arduino-cli. The toolchain arduino-cli installs works,
+  and `build.sh` finds it.
 * [`arduino-cli`](https://arduino.github.io/arduino-cli/installation/) to flash
   (the Arduino IDE works as well - open `firmware/asm_sketch/asm_sketch.ino`).
 * Rust 1.70+ to build the miner. No crates, no network access needed to build.
@@ -156,6 +266,11 @@ cd duco-rust-miner
 #    a Nano, Uno or Pro Mini takes the looped core; boards whose name
 #    arduino-cli cannot read need --board
 ./scripts/flash.sh --board arduino:avr:nano firmware/nano_i2c_sketch /dev/ttyUSB0
+
+#    a board with only 8 KB of flash has no room for the Arduino core at all:
+#    firmware/tiny85 is the same protocol built from registers
+cd firmware/tiny85 && ./build.sh atmega8 && cd ../..
+avrdude -c arduino -p atmega8 -P /dev/ttyUSB0 -U flash:w:firmware/tiny85/duco_tiny_atmega8.hex
 
 # 2. build the miner
 cd miner && cargo build --release
@@ -419,10 +534,10 @@ reply parsing, and the base64 mining-key normalisation:
 cd miner && cargo test
 ```
 
-## AVR gotchas the generator has to get right
+## AVR gotchas worth knowing
 
-Worth knowing if you want to change the core, because each of these is a
-plausible way to get a board that hashes silently wrong:
+Each of these is a plausible way to end up with a board that hashes silently
+wrong. The first list is what the generator has to get right:
 
 * `lds`/`sts` move **one byte**, not a 32-bit word - a 32-bit value needs four of
   each. The classic "LDS loads two bytes" mistake leaves every odd register
@@ -448,6 +563,30 @@ plausible way to get a board that hashes silently wrong:
   deletes them;
 * `.inc` files are not reliably copied by arduino-cli, so the generated core is
   included as a `.h`.
+
+Four more that only bite a build with no Arduino libraries in it, like
+`firmware/tiny85`:
+
+* **AVR's `int` is 16 bits wide**, so a literal shifted past that width loses
+  bits. `tail[...] |= 0x80u << 24` is a shift past the width of the type the
+  literal is written in, and the SHA-1 padding byte quietly disappears from the
+  message. On a board it looks like a core that finds two- and three-digit
+  nonces and misses one- and four-digit ones - which is what the probe showed
+  before the literal was cast to `uint32_t` first. `check_tiny_core.py` cannot
+  catch this, because on a desktop the same expression is well defined.
+* **TWCR is not a set/clear register.** Every write replaces the whole byte, so
+  an acknowledge that leaves `TWIE` out switches the bus interrupt off for good.
+  The board then answers the first poll and never answers again, and the master
+  hangs waiting for a transmission that will never finish.
+* **A START that never completes has to be abandoned by turning the module off**
+  (`TWCR = 0`). With `TWEN` still set and `TWSTA` pending, the TWI keeps asking
+  for a start condition and holds SDA low, which jams the bus for everything
+  attached to it, the board that did it included.
+* **The baud divisor has to be rounded.** `(F_CPU/16 + BAUD/2)/BAUD - 1` is
+  UBRR 8, i.e. 111,111 baud, 3.5% off the 115,200 a PC asks for; truncating
+  `(F_CPU/16)/BAUD - 1` gives UBRR 7, 125,000 baud, 8.5% error, and the replies
+  arrive as garbage. 3.5% is well inside what both ends tolerate, which is why
+  the miner at 115200 reads the bare-metal board fine.
 
 ## Troubleshooting
 
@@ -477,6 +616,15 @@ plausible way to get a board that hashes silently wrong:
   is still searching answers every poll with a newline, so a master that reads a
   line gets an empty one and polls again - that is the reference behaviour, not a
   hang.
+* **A bare-metal board from `firmware/tiny85` prints nothing at boot** - it runs
+  its UART at 111,111 baud (UBRR 8), which is what a 115,200 terminal reads
+  correctly; a truncated divisor (UBRR 7, 125,000 baud) is 8.5% off and the
+  replies come back as garbage. Before it prints anything the board walks
+  addresses 1 to 126 looking for a free one, so if something else on the bus is
+  holding SDA low at that moment it says `I2C: no free bus address`, mines over
+  serial only, and retries the bus every five seconds. Flashing it with avrdude
+  writes only the application pages, so the bootloader is left alone and an
+  Arduino sketch can be uploaded afterwards with arduino-cli.
 * **"BAD Too high starting difficulty"** - normal, once per connection per board.
   The node starts the tier probe at difficulty 512 and then drops to 128; the
   first nonce found against the old target is not valid for the new one. The
@@ -499,6 +647,9 @@ miner/                    Rust PC-side miner (Cargo.toml, src/main, pool, board,
 firmware/asm_sketch/      Mega sketch: asm_sketch.ino + duco_hash.cpp + generated duco_rounds.h + i2c_slave.*
 firmware/nano_i2c_sketch/ the same sketch with the looped core, for an ATmega328P
 firmware/asm_core/        the generator and the simulators that verify it
+firmware/tiny_core/       the 1.9 KB looped C core for 8 KB chips, with its
+                          hashlib check and its per-chip size report
+firmware/tiny85/          bare-metal miner for ATmega8/16/168/328, no Arduino core
 firmware/c_core/          the optimised C baseline (3.66x) for comparison
 firmware/official_sketch/ the stock 4.3 sketch (1.00x) baseline
 firmware/i2c_bench/       an Arduino I2C master that drives a slave through one job
@@ -522,6 +673,25 @@ Settings.cfg.example      template for the official-format config file
   master from the reference rig implementations - ESP32, ESP8266, Raspberry Pi -
   since the bench in this repo is its own master and the master half of a real rig
   is somebody else's firmware.
+* The bare-metal build in `firmware/tiny85` was measured on an ATmega328P Nano
+  and nothing else. The ATmega8, ATmega16 and ATmega168P builds compile against
+  the same register-level TWI and UART driver, but no board of those kinds was
+  run here. The ATtiny85 build compiles - 2,236 B of flash, 237 B of RAM - with
+  the bus driver compiled out, because that chip has no TWI module and would
+  need a USI two-wire driver that is not written. So the 8 KB claim is that the
+  whole miner fits in half of an ATmega8's flash with the bus path intact; the
+  ATtiny85 line is a size and instruction-set check, not a working miner.
+* The bare-metal job ring is 128 bytes, a little over one job wide, and while a
+  search is running the board ignores the bytes that arrive on either path. That
+  is deliberate: two masters writing into one ring is the only way a job line can
+  end up spliced onto somebody else's bytes, and a spliced line still parses as a
+  job - 40 hex characters, 40 hex characters, a difficulty - with the wrong
+  target. Before that guard was in place, running `firmware/i2c_bench` and the
+  Rust miner against the same bare-metal board at the same time had the board
+  spend 13 seconds hunting a nonce that was never in the range and report 0 for
+  jobs the serial probe had answered correctly seconds earlier. The rule is still
+  one master per board: a board already mining does not take a second job until
+  it has answered the first.
 * The reward figures are measurements on one account over one period. Kolka's
   `reward_div` changes as the network's total hashrate changes, so the DUCO/hour
   numbers will drift; the *relative* speedups are the stable part.

@@ -126,10 +126,21 @@ garbage.
 
 The 168/328 class chips carry an eight byte device id in the boot signature row,
 which is what the rigs use as the miner's identity; the board reads it and
-reports it as `DUCOID` plus those sixteen hex digits. ATmega8, ATmega16 and
-ATtiny85 have no such row, so every board of that kind reports the same id
-unless it is changed in `build_ducoid()`. Two boards reporting the same id are
-counted by the pool as one miner.
+reports it as `DUCOID` plus those sixteen hex digits. Clone boards sometimes ship
+with that row blank, and ATmega8, ATmega16 and ATtiny85 have no such row at all,
+so several boards can end up reporting the same id - which the pool counts as one
+miner. Whatever the signature row holds, the address the board claimed on the bus
+is written into the last two hex digits of the id, which is enough to tell the
+boards on a rig apart:
+
+```
+address 1  ->  DUCOID0000000000000001
+address 2  ->  DUCOID0000000000000002
+```
+
+A board with no address - one built with `-DDUCO_NO_I2C`, or an ATtiny85, which
+has no TWI to claim an address with - keeps the plain id its signature row gives
+it.
 
 ## One board, one master
 

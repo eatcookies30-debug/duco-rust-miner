@@ -32,13 +32,13 @@ reports for the sketch as it is in this repo; the bare-metal row is what
 |---|---|---|---|---|
 | `firmware/official_sketch` (stock 4.3) | Mega 2560 | 13,670 B | 338 | 1.00x |
 | `firmware/c_core` (optimised C) | Mega 2560 | 36,196 B | 1,239 | 3.66x |
-| `firmware/asm_sketch` (assembly core) | Mega 2560 | 40,480 B | **1,824** | **5.40x** |
+| `firmware/asm_sketch` (assembly core) | Mega 2560 | 40,562 B | **1,824** | **5.40x** |
 | `firmware/official_sketch` (stock 4.3) | Nano 328P | 13,072 B | 340 | 1.00x |
-| `firmware/nano_i2c_sketch` (looped core) | Nano 328P | 26,038 B | **1,759** | **5.17x** |
-| `firmware/tiny85` (bare metal, no Arduino core) | Nano 328P | 4,448 B | 763 | 2.24x |
+| `firmware/nano_i2c_sketch` (looped core) | Nano 328P | 26,100 B | **1,759** | **5.17x** |
+| `firmware/tiny85` (bare metal, no Arduino core) | Nano 328P | 4,510 B | 763 | 2.24x |
 
-The I2C glue is the same code in both sketches. On a Mega it adds 2,424 B
-(38,056 B without it); on a Nano it adds 5,662 B (20,328 B without it), most of
+The I2C glue is the same code in both sketches. On a Mega it adds 2,638 B
+(37,924 B without it); on a Nano it adds 5,780 B (20,320 B without it), most of
 which is the Wire library itself and the job ring the receive interrupt fills. Driven over the I2C bus rather than USB serial, the same
 Nano sketch measures 1,590 H/s, which is 4.68x the stock sketch on that board.
 The bare-metal build measures 763 H/s on the same Nano over USB serial and
@@ -143,7 +143,7 @@ with the small core, takes a job over Serial and answers on the Wire bus
 measures 5,514 B on a 328P with arduino-cli 1.4.1 before the board id, the
 timing and the reply line are added. `firmware/tiny_core` and
 `firmware/tiny85` are the firmware for those boards: the same protocol and the
-same reply line, driven from registers with no Arduino libraries, in 4,448 B -
+same reply line, driven from registers with no Arduino libraries, in 4,510 B -
 smaller than the skeleton sketch that only does part of the job.
 
 **The core** (`tiny_core/tiny_hash.c`) is a single looped round body:
@@ -191,10 +191,10 @@ cd firmware/tiny85
 
 | chip | flash | RAM | |
 |---|---|---|---|
-| ATmega328P (Nano, Uno) | 4,448 B | 713 B | measured on a Nano in this setup |
-| ATmega168P | 4,448 B | 713 B | same driver as the 328P |
-| ATmega8 | 4,200 B | 729 B | 51% of an 8 KB chip, 71% of its 1 KB of RAM |
-| ATmega16 | 4,330 B | 729 B | |
+| ATmega328P (Nano, Uno) | 4,510 B | 713 B | measured on a Nano in this setup |
+| ATmega168P | 4,510 B | 713 B | same driver as the 328P |
+| ATmega8 | 4,258 B | 729 B | 51% of an 8 KB chip, 71% of its 1 KB of RAM |
+| ATmega16 | 4,392 B | 729 B | |
 | ATtiny85 | 2,236 B | 237 B | compiles; the bus driver is compiled out, see below |
 
 There is no sketch for arduino-cli to build, so it goes on with avrdude:
@@ -385,6 +385,24 @@ prints at startup is always the one to talk to. Before probing, the board checks
 that SDA and SCL are both high: probing in the middle of somebody else's
 transaction leaves the TWI module waiting for a start condition with SDA held
 low, which jams the bus for every board on it.
+
+**Every board has to be a different name at the pool.** A board's identity is the
+sixteen hex digits of the eight byte device id in its boot signature row, and
+clone boards often ship with that row blank: four of the six Nanos in this setup
+read all 0xFF, so they would all report the same id and the pool would count them
+as a single miner. The address the board claims is written into the last two
+digits of its id, which keeps the id the length the protocol expects and makes
+each board its own:
+
+```
+address 1  ->  DUCOIDFFDFFFDFFFFFFF01
+address 2  ->  DUCOIDFFDFFFDFFFFFFF02
+address 3  ->  DUCOIDFFDFFFDFFFFFFF03
+```
+
+A board that never joins a bus has no address to fold in, so it keeps the plain id
+its signature row gives it.
+
 The exchange is the one from
 [ricaun/DuinoCoinI2C](https://github.com/ricaun/DuinoCoinI2C):
 

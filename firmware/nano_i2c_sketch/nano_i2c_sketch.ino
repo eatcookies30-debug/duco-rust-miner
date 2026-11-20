@@ -113,17 +113,28 @@ static uint32_t search(uint32_t difficulty, uint32_t *elapsed) {
   return nonce;
 }
 
-void setup() {
-  pinMode(LED_BUILTIN, OUTPUT);
-  PORTB &= B11011111;
-
+/* The board's name on the pool is the sixteen hex digits of the eight byte
+   device id in the boot signature row. Clone boards frequently ship with that
+   row blank, so several of them report the same name and the pool counts them
+   as one miner. The bus address the board claimed goes in the last byte, which
+   keeps the id the same length and makes every board on a rig its own. */
+static void build_ducoid(uint8_t address) {
   ducoid[0] = 'D'; ducoid[1] = 'U'; ducoid[2] = 'C'; ducoid[3] = 'O';
   ducoid[4] = 'I'; ducoid[5] = 'D';
   for (uint8_t i = 0; i < 8; i++) {
     ducoid[6 + 2 * i] = hexChar((uint8_t)UniqueID8[i] >> 4);
     ducoid[7 + 2 * i] = hexChar((uint8_t)UniqueID8[i] & 0x0f);
   }
+  if (address) {
+    ducoid[20] = hexChar(address >> 4);
+    ducoid[21] = hexChar(address & 0x0f);
+  }
   ducoid[22] = 0;
+}
+
+void setup() {
+  pinMode(LED_BUILTIN, OUTPUT);
+  PORTB &= B11011111;
 
   Serial.begin(115200);
   Serial.setTimeout(10000);
@@ -138,6 +149,10 @@ void setup() {
   } else {
     Serial.println("I2C: no address available (bus busy, SLAVE_ADDRESS taken, or every address used) - serial only");
   }
+
+  /* A board that never joined a bus has no address to fold into its name, so it
+   keeps the id its signature row gives it. */
+  build_ducoid(address);
 }
 
 void loop() {

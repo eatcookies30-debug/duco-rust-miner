@@ -607,15 +607,16 @@ static void debug_dump_job(uint32_t difficulty) {
 
 /* ---------------- the board's own id ---------------- */
 
-static void build_ducoid(void) {
+static void build_ducoid(uint8_t address) {
   ducoid[0] = 'D'; ducoid[1] = 'U'; ducoid[2] = 'C'; ducoid[3] = 'O';
   ducoid[4] = 'I'; ducoid[5] = 'D';
 
   /* The 168/328 class chips carry an eight byte device id in the boot
      signature row, which is what the rigs use as the miner's identity. Chips
-     without one (ATmega8, ATmega16, ATtiny85) have nothing to read, so every
-     board of that kind reports the same id unless it is changed here. Two
-     boards reporting the same id are counted as one miner by the pool. */
+     without one (ATmega8, ATmega16, ATtiny85) have nothing to read, and clone
+     boards sometimes ship with the row blank, so several boards can end up
+     reporting the same id. Two boards reporting the same id are counted as one
+     miner by the pool. */
 #if defined(__SPM_REG) && (defined(__AVR_ATmega328P__) || defined(__AVR_ATmega328__) || \
                            defined(__AVR_ATmega168P__) || defined(__AVR_ATmega168__))
   for (uint8_t i = 0; i < 8; i++) {
@@ -626,6 +627,14 @@ static void build_ducoid(void) {
 #else
   memcpy(ducoid + 6, "0000000000000000", 16);
 #endif
+
+  /* The bus address the board claimed goes in the last byte: same length, and
+     every board on a rig is distinguishable from the others whatever its
+     signature row holds. A board with no address keeps the plain id. */
+  if (address) {
+    ducoid[20] = hexChar(address >> 4);
+    ducoid[21] = hexChar(address & 0x0f);
+  }
   ducoid[22] = 0;
 }
 
@@ -651,7 +660,6 @@ static void report_address(uint8_t address) {
 
 int main(void) {
   timer_start();
-  build_ducoid();
 
 #if defined(HAVE_UART)
   uart_init();
@@ -659,6 +667,7 @@ int main(void) {
 
 #if defined(HAVE_TWI)
   uint8_t address = twi_begin();
+  build_ducoid(address);
   report_address(address);
   /* A bus that was busy at the instant the board came up is not a reason to
    give up on it for the life of the board, so the scan is tried again every
@@ -667,6 +676,8 @@ int main(void) {
 #if defined(DUCO_DEBUG) && defined(HAVE_UART)
   uint32_t traceAt = readTicks();
 #endif
+#else
+  build_ducoid(0);
 #endif
 
   sei();
@@ -675,7 +686,10 @@ int main(void) {
 #if defined(HAVE_TWI)
     if (!address && (uint32_t)(readTicks() - retryAt) < (1UL << 31)) {
       address = twi_begin();
-      if (address) report_address(address);
+      if (address) {
+        build_ducoid(address);
+        report_address(address);
+      }
       retryAt = readTicks() + 5UL * F_CPU;
     }
 #if defined(DUCO_DEBUG) && defined(HAVE_UART)

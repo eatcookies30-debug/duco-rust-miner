@@ -35,12 +35,22 @@ typedef uint32_t uintDiff;
 #include "duco_hash.h"
 #include "i2c_slave.h"
 
-String get_DUCOID() {
+/* The bus address the board claimed goes in the last byte of the id. Clone
+   boards often have a blank signature row, and several of them then report the
+   same name, which the pool counts as one miner. Folding the address in keeps
+   the id the length the protocol expects and makes every board on a rig its
+   own; a board that never joined a bus keeps the id its signature row gives it. */
+String get_DUCOID(uint8_t address) {
   String ID = "DUCOID";
   char buff[4];
   for (size_t i = 0; i < 8; i++) {
     sprintf(buff, "%02X", (uint8_t)UniqueID8[i]);
     ID += buff;
+  }
+  if (address) {
+    sprintf(buff, "%02X", address);
+    ID.setCharAt(20, buff[0]);
+    ID.setCharAt(21, buff[1]);
   }
   return ID;
 }
@@ -54,7 +64,6 @@ static char wireTargetHash[41];
 void setup() {
   // Prepare built-in led pin as output
   pinMode(LED_BUILTIN, OUTPUT);
-  DUCOID = get_DUCOID();
   // Open serial port
   Serial.begin(115200);
   Serial.setTimeout(10000);
@@ -70,6 +79,8 @@ void setup() {
   } else {
     Serial.println("I2C: no address available (bus busy, SLAVE_ADDRESS taken, or every address used) - serial only");
   }
+
+  DUCOID = get_DUCOID(address);
 }
 
 void lowercase_hex_to_bytes(char const * hexDigest, uint8_t * rawDigest) {

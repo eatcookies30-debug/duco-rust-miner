@@ -35,7 +35,10 @@ def jobs(argv):
 
 
 def main():
-    port = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyACM2"
+    if len(sys.argv) < 2:
+        print("usage: board_probe.py <port> [--random N]", file=sys.stderr)
+        return 2
+    port = sys.argv[1]
     ser = serial.Serial(port, 115200, timeout=200)
     time.sleep(2.5)
     ser.reset_input_buffer()

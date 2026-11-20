@@ -21,12 +21,12 @@ miner. Only the speed and the reliability change.
 
 ## Results
 
-Everything below was measured on the boards in this setup - two Mega 2560s and
-one Nano 328P - with the same benchmark (`miner --bench`, which asks each board
-for nonces 50, 9,999, 42,424 and 65,500 and reports the nonce and the elapsed
-time the board itself prints). The flash figures are what arduino-cli 1.4.1
-reports for the sketch as it is in this repo; the bare-metal row is what
-`firmware/tiny85/build.sh atmega328p` measures with avr-gcc 7.3.0.
+Everything below was measured on the two board families these sketches target -
+a Mega 2560 and a Nano 328P clone - with the same benchmark (`miner --bench`,
+which asks each board for nonces 50, 9,999, 42,424 and 65,500 and reports the
+nonce and the elapsed time the board itself prints). The flash figures are what
+arduino-cli 1.4.1 reports for the sketch as it is in this repo; the bare-metal
+row is what `firmware/tiny85/build.sh atmega328p` measures with avr-gcc 7.3.0.
 
 | firmware | board | flash | H/s per board | vs stock 4.3 on the same board |
 |---|---|---|---|---|
@@ -39,12 +39,12 @@ reports for the sketch as it is in this repo; the bare-metal row is what
 
 The I2C glue is the same code in both sketches. On a Mega it adds 2,638 B
 (37,924 B without it); on a Nano it adds 5,780 B (20,320 B without it), most of
-which is the Wire library itself and the job ring the receive interrupt fills. Driven over the I2C bus rather than USB serial, the same
-Nano sketch measures 1,590 H/s, which is 4.68x the stock sketch on that board.
-The bare-metal build measures 763 H/s on the same Nano over USB serial and
-727 H/s over the I2C bus; it is the firmware that would fit an 8 KB chip, and it
-is about 43% of the assembly core's speed (see
-[A core for an 8 KB board](#a-core-for-an-8-kb-board)).
+which is the Wire library itself and the job ring the receive interrupt fills.
+Driven over the I2C bus rather than USB serial, the same Nano sketch measures
+1,590 H/s, which is 4.68x the stock sketch on that board. The bare-metal build
+measures 763 H/s on the same Nano over USB serial and 727 H/s over the I2C bus;
+it is the firmware that would fit an 8 KB chip, and it is about 43% of the
+assembly core's speed (see [A core for an 8 KB board](#a-core-for-an-8-kb-board)).
 
 Typical bench output for the assembly core on a Mega:
 
@@ -191,7 +191,7 @@ cd firmware/tiny85
 
 | chip | flash | RAM | |
 |---|---|---|---|
-| ATmega328P (Nano, Uno) | 4,510 B | 713 B | measured on a Nano in this setup |
+| ATmega328P (Nano, Uno) | 4,510 B | 713 B | measured on a Nano 328P clone |
 | ATmega168P | 4,510 B | 713 B | same driver as the 328P |
 | ATmega8 | 4,258 B | 729 B | 51% of an 8 KB chip, 71% of its 1 KB of RAM |
 | ATmega16 | 4,392 B | 729 B | |
@@ -206,7 +206,7 @@ avrdude -c arduino -p atmega328p -P /dev/ttyUSB0 -U flash:w:duco_tiny_atmega328p
 The board then speaks the same protocol as the sketches - `prevHash,targetHash,difficulty\n`
 in, `nonce,elapsed,DUCOID\n` out, with the nonce and the elapsed time as binary
 digits on the serial port and decimal over I2C - so the Rust miner drives it
-without any change. `--bench` against the bare-metal Nano in this setup:
+without any change. `--bench` against a bare-metal Nano 328P clone:
 
 ```
 /dev/ttyUSB0: DUCOID0123456789ABCDEF01 - test nonce 50 in 65489 us -> 763.49 H/s
@@ -387,17 +387,16 @@ transaction leaves the TWI module waiting for a start condition with SDA held
 low, which jams the bus for every board on it.
 
 **Every board has to be a different name at the pool.** A board's identity is the
-sixteen hex digits of the eight byte device id in its boot signature row, and
-clone boards often ship with that row blank: four of the six Nanos in this setup
-read all 0xFF, so they would all report the same id and the pool would count them
-as a single miner. The address the board claims is written into the last two
-digits of its id, which keeps the id the length the protocol expects and makes
-each board its own:
+sixteen hex digits of the eight byte device id in its boot signature row. Clone
+boards often ship with that row blank, in which case every board of that kind
+reads 0xFF and reports the same id, and the pool counts them as a single miner.
+The address the board claims is written into the last two digits of its id, which
+keeps the id the length the protocol expects and makes each board its own:
 
 ```
-address 1  ->  DUCOIDFFDFFFDFFFFFFF01
-address 2  ->  DUCOIDFFDFFFDFFFFFFF02
-address 3  ->  DUCOIDFFDFFFDFFFFFFF03
+signature row 3A 7F 2C 91 4D 6E 0B 58, address 1  ->  DUCOID3A7F2C914D6E0B01
+signature row 3A 7F 2C 91 4D 6E 0B 58, address 2  ->  DUCOID3A7F2C914D6E0B02
+signature row all 0xFF,              address 3  ->  DUCOIDFFDFFFDFFFFFFF03
 ```
 
 A board that never joins a bus has no address to fold in, so it keeps the plain id
@@ -444,28 +443,29 @@ that makes a board look dead rather than slow:
 
 ### More than one board on the bus
 
-Every slave hangs off the same two wires, so a rig of seven Nanos on one Mega is
-three nets, not seven pairs:
+Every slave hangs off the same two wires, so a rig of N boards on one master is
+three nets, not N pairs:
 
 ```
-              Mega 2560 (master)
-              D20 = SDA ─┬─ A4 ─ A4 ─ A4 ─ A4 ─ A4 ─ A4 ─ A4   (7 Nanos)
-              D21 = SCL ─┼─ A5 ─ A5 ─ A5 ─ A5 ─ A5 ─ A5 ─ A5
-              GND ───────┴─ GND ─ GND ─ GND ─ GND ─ GND ─ GND
+                master  (Mega, Uno, ESP32, ...)
+                SDA ─┬─ A4 ─ A4 ─ A4 ─ A4 ─ ...
+                SCL ─┼─ A5 ─ A5 ─ A5 ─ A5 ─ ...
+                GND ─┴─ GND ─ GND ─ GND ─ GND ─ ...
 ```
 
-The internal pull-ups of every board end up in parallel: seven 328P boards give
-roughly 6 kOhm on each line, which is well inside what the bus tolerates. Bus
-capacitance grows with every board and every foot of wire, so keep the leads
-short, and if replies start getting dropped, cut `BUS_CLOCK_HZ` in the bench to
-50000 before blaming a board.
+Every board's internal pull-up ends up in parallel, so each board you add makes
+the lines stronger: ten 328P boards give roughly 4 kOhm on each line, which the
+bus is happy with. Bus capacitance grows with every board and every foot of wire,
+so keep the leads short, and if replies start getting dropped, cut
+`BUS_CLOCK_HZ` in the bench to 50000 before blaming a board.
 
-Give the boards their addresses as they come up, one at a time:
+Give each board its own address as you flash it, one board at a time:
 
 ```bash
-for n in 1 2 3 4 5 6 7; do
+port=/dev/ttyUSB0      # whatever port arduino-cli reports the board on
+for n in 1 2 3 4 5 6; do
   ./scripts/flash.sh --board arduino:avr:nano --define SLAVE_ADDRESS=$n \
-                     firmware/nano_i2c_sketch /dev/ttyUSB0
+                     firmware/nano_i2c_sketch "$port"
 done
 ```
 
@@ -479,7 +479,7 @@ the bus while the others sit idle. The bus is rescanned every 30 s, so a board
 plugged in later joins without restarting the master. `MAX_SLAVES` is 10; raise
 it for a bigger rig, keeping in mind that the master carries a 48 byte reply
 buffer per slave, so a 328P board acting as master runs out of RAM long before a
-Mega does. A run looks like this:
+Mega does. With one board on the bus, a run looks like this:
 
 ```
 Slave at address 1
@@ -492,10 +492,10 @@ The job the bench sends is SHA-1(`ba29a15896fd2d792d5c4b60668bf2b9feebc51d` +
 board's own DUCOID. Driving a Nano this way measures 1,590 H/s against 1,759 H/s
 on the same board over USB serial: the search runs in the main loop while the TWI
 interrupts serve the bus, so the difference is the cost of the polls, since the
-master has to ask for the answer one byte at a time. Those figures are from one
-slave on the bus; the round-robin path above has only been exercised with the
-boards physically present, so the hashrate each board gets when several are
-searching at once is not measured yet.
+master has to ask for the answer one byte at a time. Those figures are from a
+single slave on the bus - the round-robin over several boards at once has not been
+measured, so per-board hashrate with N boards searching simultaneously is still
+untested.
 
 The job and reply handling can also be exercised on a desktop, without a board,
 with `firmware/i2c_slave_test`:
@@ -583,8 +583,8 @@ python3 firmware/asm_core/board_probe.py /dev/ttyUSB0 --random 10
 ```
 
 The probe sends jobs whose nonce is known in advance and checks the nonce each
-board reports. Every board in this setup was run through it: 10 jobs per board,
-every nonce found.
+board reports. Every board used for the figures above was put through it: 10 jobs
+per board, every nonce found.
 
 In addition, the miner re-computes `sha1(prevHash + nonce)` itself before
 submitting any share, so a board that ever returned a wrong nonce would be

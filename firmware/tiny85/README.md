@@ -74,7 +74,7 @@ number too.
 
 ## What it measures on a real board
 
-All of this is the atmega328p build on the Nano 328P in this setup, run through
+All of this is the atmega328p build on a Nano 328P clone, run through
 `miner --bench`, which sends nonces 50, 9,999, 42,424 and 65,500 and reports
 what the board says it found and how long it says it took:
 

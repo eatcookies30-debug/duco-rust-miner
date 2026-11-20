@@ -32,13 +32,14 @@ reports for the sketch as it is in this repo; the bare-metal row is what
 |---|---|---|---|---|
 | `firmware/official_sketch` (stock 4.3) | Mega 2560 | 13,670 B | 338 | 1.00x |
 | `firmware/c_core` (optimised C) | Mega 2560 | 36,196 B | 1,239 | 3.66x |
-| `firmware/asm_sketch` (assembly core) | Mega 2560 | 40,144 B | **1,824** | **5.40x** |
+| `firmware/asm_sketch` (assembly core) | Mega 2560 | 40,480 B | **1,824** | **5.40x** |
 | `firmware/official_sketch` (stock 4.3) | Nano 328P | 13,072 B | 340 | 1.00x |
-| `firmware/nano_i2c_sketch` (looped core) | Nano 328P | 25,714 B | **1,759** | **5.17x** |
+| `firmware/nano_i2c_sketch` (looped core) | Nano 328P | 26,038 B | **1,759** | **5.17x** |
 | `firmware/tiny85` (bare metal, no Arduino core) | Nano 328P | 4,448 B | 763 | 2.24x |
 
-The I2C glue is the same code in both sketches and costs 2,216 B on a Mega
-(37,928 B without it). Driven over the I2C bus rather than USB serial, the same
+The I2C glue is the same code in both sketches. On a Mega it adds 2,424 B
+(38,056 B without it); on a Nano it adds 5,662 B (20,328 B without it), most of
+which is the Wire library itself and the job ring the receive interrupt fills. Driven over the I2C bus rather than USB serial, the same
 Nano sketch measures 1,590 H/s, which is 4.68x the stock sketch on that board.
 The bare-metal build measures 763 H/s on the same Nano over USB serial and
 727 H/s over the I2C bus; it is the firmware that would fit an 8 KB chip, and it
@@ -374,7 +375,17 @@ no external resistors on the lines, and a Mega 2560 has them onboard already.
 
 At startup the board walks addresses 1 to 126 and takes the first one nobody
 acknowledges, then prints what it chose on the serial port
-(`I2C slave address: 1`). The exchange is the one from
+(`I2C slave address: 1`). Those numbers move whenever a board resets, so on a rig
+where the address is how a share gets attributed, give each board its own:
+build it with `-DSLAVE_ADDRESS=<1-126>`, which `scripts/flash.sh` passes through
+as `--define SLAVE_ADDRESS=3`. A fixed address that is already held is retried a
+few times, and if it never comes free the board falls back to the scan and takes
+the first free address, so it keeps mining instead of sitting out; the number it
+prints at startup is always the one to talk to. Before probing, the board checks
+that SDA and SCL are both high: probing in the middle of somebody else's
+transaction leaves the TWI module waiting for a start condition with SDA held
+low, which jams the bus for every board on it.
+The exchange is the one from
 [ricaun/DuinoCoinI2C](https://github.com/ricaun/DuinoCoinI2C):
 
 * the master pushes `prevHash,targetHash,difficulty\n`, one byte per
@@ -413,22 +424,49 @@ that makes a board look dead rather than slow:
   the glue accepts all 20 jobs the thread pushes, against the live length it
   accepts none of them.
 
-To see a real exchange without a rig, flash `firmware/i2c_bench` to a Mega or an
-Uno, wire it to a mining board as above and open the serial monitor at 115200.
-It scans addresses 1 to 31, sends each slave it finds a job whose nonce is known
-in advance, prints the reply it got back, and says OK or MISMATCH. It waits up to
-20 s for a slave to finish one search - about 6.3 s for a Nano at difficulty 100 -
-and a slave that never answers gets the job sent again, up to three times. Each
-run repeats every 20 s and keeps running totals, so a flaky wire shows up as a
-mismatch rate rather than as one odd line. Output looks like this:
+### More than one board on the bus
+
+Every slave hangs off the same two wires, so a rig of seven Nanos on one Mega is
+three nets, not seven pairs:
 
 ```
-Scanning the bus for slaves...
-Slave at 1: job ba29a15896fd2d792d5c4b60668bf2b9feebc51d,3169de686edf3ec107cc21cb0d9cfce0837f34a3,100
-  reply: 9999,6286296,DUCOID0123456789ABCDEF01
-  hashrate: 1590 H/s
-  nonce: 9999 OK
-Totals: 12 jobs, 12 correct, 0 wrong, 0 of 1032 job bytes the slave did not acknowledge.
+              Mega 2560 (master)
+              D20 = SDA ─┬─ A4 ─ A4 ─ A4 ─ A4 ─ A4 ─ A4 ─ A4   (7 Nanos)
+              D21 = SCL ─┼─ A5 ─ A5 ─ A5 ─ A5 ─ A5 ─ A5 ─ A5
+              GND ───────┴─ GND ─ GND ─ GND ─ GND ─ GND ─ GND
+```
+
+The internal pull-ups of every board end up in parallel: seven 328P boards give
+roughly 6 kOhm on each line, which is well inside what the bus tolerates. Bus
+capacitance grows with every board and every foot of wire, so keep the leads
+short, and if replies start getting dropped, cut `BUS_CLOCK_HZ` in the bench to
+50000 before blaming a board.
+
+Give the boards their addresses as they come up, one at a time:
+
+```bash
+for n in 1 2 3 4 5 6 7; do
+  ./scripts/flash.sh --board arduino:avr:nano --define SLAVE_ADDRESS=$n \
+                     firmware/nano_i2c_sketch /dev/ttyUSB0
+done
+```
+
+`firmware/i2c_bench` is the master for that arrangement. It walks addresses 1 to
+126, adds every slave that answers, and then drives all of them at once: each
+slave gets its own job, and the master polls each slave one byte at a time in
+turn before moving to the next one, so N boards search at the same time instead
+of one at a time. A board that is still searching answers a poll with a bare
+newline and the master moves on, which is what stops one slow board from holding
+the bus while the others sit idle. The bus is rescanned every 30 s, so a board
+plugged in later joins without restarting the master. `MAX_SLAVES` is 10; raise
+it for a bigger rig, keeping in mind that the master carries a 48 byte reply
+buffer per slave, so a 328P board acting as master runs out of RAM long before a
+Mega does. A run looks like this:
+
+```
+Slave at address 1
+slave 1: nonce 9999 OK, 1590 H/s  (1/1 so far)
+Totals: 1 slaves, 1 jobs, 1 correct, 0 wrong, 0 of 86 job bytes unacked, 1590 H/s across the 1 mining slaves
 ```
 
 The job the bench sends is SHA-1(`ba29a15896fd2d792d5c4b60668bf2b9feebc51d` +
@@ -436,22 +474,29 @@ The job the bench sends is SHA-1(`ba29a15896fd2d792d5c4b60668bf2b9feebc51d` +
 board's own DUCOID. Driving a Nano this way measures 1,590 H/s against 1,759 H/s
 on the same board over USB serial: the search runs in the main loop while the TWI
 interrupts serve the bus, so the difference is the cost of the polls, since the
-master has to ask for the answer one byte at a time.
+master has to ask for the answer one byte at a time. Those figures are from one
+slave on the bus; the round-robin path above has only been exercised with the
+boards physically present, so the hashrate each board gets when several are
+searching at once is not measured yet.
 
 The job and reply handling can also be exercised on a desktop, without a board,
 with `firmware/i2c_slave_test`:
 
 ```bash
 cd firmware/i2c_slave_test
-g++ -Wall -pthread -I stub -x c++ slave_test.cpp ../asm_sketch/i2c_slave.cpp -o slave_test
-./slave_test
+for flags in "" "-DSLAVE_ADDRESS=5" "-DSLAVE_ADDRESS=5 -DTEST_ADDRESS_TAKEN"; do
+  g++ -Wall -pthread -I stub -x c++ $flags \
+      slave_test.cpp ../asm_sketch/i2c_slave.cpp -o slave_test
+  ./slave_test | tail -2
+done
 ```
 
 It drives `i2c_slave.cpp` through the same sequence a master uses and checks the
 parsed job, the reply line, the newline-while-searching behaviour, the buffer
 limits, malformed jobs, and - with a second thread playing the receive interrupt -
-that a job is never taken before its newline has arrived. Currently 33 checks,
-0 failures.
+that a job is never taken before its newline has arrived. The three builds cover
+an auto-claimed address, a fixed one, and a fixed one that is already held by
+another board. Currently 33 checks per build, 0 failures in all three.
 
 ## How the PC-side miner differs from `AVR_Miner.py`
 
@@ -612,10 +657,10 @@ Four more that only bite a build with no Arduino libraries in it, like
   on every board: A4/A5 on a 328P, D20/D21 on a Mega. `firmware/i2c_bench` prints
   the pins it is using when it finds no slave. The slave takes the first address
   nobody acknowledges, so the number the sketch prints at startup is the address
-  to talk to, and `firmware/i2c_bench` scans addresses 1 to 31 only. A slave that
-  is still searching answers every poll with a newline, so a master that reads a
-  line gets an empty one and polls again - that is the reference behaviour, not a
-  hang.
+  to talk to, and `firmware/i2c_bench` walks the whole range, addresses 1 to 126.
+  A slave that is still searching answers every poll with a newline, so a master
+  that reads a line gets an empty one and polls again - that is the reference
+  behaviour, not a hang.
 * **A bare-metal board from `firmware/tiny85` prints nothing at boot** - it runs
   its UART at 111,111 baud (UBRR 8), which is what a 115,200 terminal reads
   correctly; a truncated divisor (UBRR 7, 125,000 baud) is 8.5% off and the

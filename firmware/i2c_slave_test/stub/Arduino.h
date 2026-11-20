@@ -13,5 +13,9 @@
 
 static inline void pinMode(int, int) {}
 static inline unsigned long millis() { return 0; }
+/* The stub models one board on an idle bus, so the lines always read high and
+   a delay is a no-op. */
+static inline int digitalRead(int) { return 1; }
+static inline void delay(unsigned long) {}
 
 #endif

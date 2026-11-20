@@ -23,6 +23,10 @@ FakeWire Wire;
 
 static int failures = 0;
 
+/* The address this run's board claimed, so the same checks work whether the board
+   auto-claimed one or was built with a fixed SLAVE_ADDRESS. */
+static uint8_t busAddress = 1;
+
 static void check(bool condition, const char *what) {
   printf("%-5s %s\n", condition ? "ok" : "FAIL", what);
   if (!condition) failures++;
@@ -46,7 +50,7 @@ static void race_test(void) {
   std::thread feeder([&feeding, JOB, ROUNDS]() {
     for (int round = 0; round < ROUNDS; round++) {
       for (int i = 0; JOB[i]; i++) {
-        Wire.beginTransmission(1);
+        Wire.beginTransmission(busAddress);
         Wire.write(JOB[i]);
         Wire.endTransmission();
       }
@@ -82,7 +86,7 @@ static void race_test(void) {
 /* The master sends one byte per transmission, like the reference masters. */
 static void send_job(const char *job) {
   for (int i = 0; job[i]; i++) {
-    Wire.beginTransmission(1);
+    Wire.beginTransmission(busAddress);
     Wire.write(job[i]);
     Wire.endTransmission();
   }
@@ -91,7 +95,7 @@ static void send_job(const char *job) {
 static void read_line(char *out, int limit) {
   int n = 0;
   for (int polls = 0; polls < 200; polls++) {
-    Wire.requestFrom(1, 1);
+    Wire.requestFrom(busAddress, 1);
     if (!Wire.available()) break;
     char c = Wire.read();
     if (c == '\n') {
@@ -104,8 +108,19 @@ static void read_line(char *out, int limit) {
 }
 
 int main(void) {
+#ifdef TEST_ADDRESS_TAKEN
+  Wire.takeOver(SLAVE_ADDRESS);
+#endif
   uint8_t address = i2c_begin();
+  busAddress = address;
+#ifdef TEST_ADDRESS_TAKEN
+  check(address != 0 && address != SLAVE_ADDRESS,
+        "a fixed address already held falls back to one that is free");
+#elif defined(SLAVE_ADDRESS)
+  check(address == SLAVE_ADDRESS, "a fixed SLAVE_ADDRESS is claimed directly");
+#else
   check(address == 1, "slave takes the first address nobody answers to");
+#endif
 
   char prev[41], target[41], line[64];
   uint32_t difficulty = 0;
@@ -130,7 +145,7 @@ int main(void) {
 
   /* Once the reply is drained every poll answers with a newline, which is how
      the reference masters read "nothing yet". */
-  Wire.requestFrom(1, 1);
+  Wire.requestFrom(busAddress, 1);
   check(Wire.available() == 1 && Wire.read() == '\n', "empty reply polls as a newline");
 
   send_job("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,"

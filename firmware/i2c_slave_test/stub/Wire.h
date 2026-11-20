@@ -13,8 +13,13 @@
 struct FakeWire {
   bool isSlave = false;
   uint8_t slaveAddress = 0;
+  /* Addresses some other board is holding, so a probe on them is acknowledged.
+     Lets the address claim code be exercised against a bus that is not empty. */
+  bool taken[128] = {};
   std::function<void(int)> onReceiveHandler;
   std::function<void()> onRequestHandler;
+
+  void takeOver(uint8_t address) { taken[address] = true; }
 
   bool transmitting = false;
   uint8_t target = 0;
@@ -41,7 +46,8 @@ struct FakeWire {
 
   int endTransmission() {
     transmitting = false;
-    if (!isSlave || target != slaveAddress) return 1; /* nothing acknowledges */
+    if (!isSlave || target != slaveAddress)
+      return taken[target] ? 0 : 1; /* nothing acknowledges unless held */
     position = 0;
     if (onReceiveHandler) onReceiveHandler(length);
     return 0;

@@ -14,8 +14,11 @@
 
 #include <stdint.h>
 
-/* Picks a free bus address and attaches the board as a slave. Returns 0 when
-   every address from 1 to 126 is already taken by another slave. */
+/* Picks a bus address and attaches the board as a slave. With SLAVE_ADDRESS set
+   to a number 1-126 (see i2c_slave.cpp) the board uses that one, retrying while
+   the bus is busy; otherwise it walks 1 to 126 and takes the first address nobody
+   acknowledges. Returns 0 when the fixed address is taken or every address is in
+   use, in which case the board stays on serial only. */
 uint8_t i2c_begin(void);
 
 /* Returns true when a complete job has arrived, filling prevHash and

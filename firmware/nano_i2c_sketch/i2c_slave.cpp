@@ -39,6 +39,19 @@
 #define FIRST_ADDRESS 1
 #define LAST_ADDRESS 127
 
+/* Set SLAVE_ADDRESS to a number 1-126 to give a board a permanent name on the
+   rig. Left alone, a board walks the range and takes the first address nobody
+   answers to, which is how boards get their numbers when they are connected one
+   at a time. The numbers move whenever a board resets, so on a rig where the
+   address is how a share is attributed, build each board with
+   -DSLAVE_ADDRESS=<n>. A fixed address that is already taken is not traded for
+   another one: the board reports that it has no address and mines over serial
+   until the bus clears, rather than quietly ending up with a number nobody
+   expected. */
+#ifndef SLAVE_ADDRESS
+#define SLAVE_ADDRESS 0
+#endif
+
 static char jobIn[JOB_LIMIT];
 static volatile uint8_t jobHead;    /* where the interrupt writes next */
 static volatile uint8_t jobTail;    /* first byte the main loop has not taken yet */
@@ -95,21 +108,47 @@ static uint8_t readField(char *dest, uint8_t limit, const char *job, uint8_t bas
   return total;
 }
 
+/* A start condition needs both lines high. Probing while another device is mid
+   transaction does nothing useful, and on the AVR a START that never completes
+   leaves the module asking for the start condition and holding SDA low, which
+   jams the bus for every board on it, this one included. Wire does not report
+   that, so the lines are read first. Returns 1 when the address is free. */
+static bool addressFree(uint8_t candidate) {
+  if (!(digitalRead(TWI_SDA_PIN) && digitalRead(TWI_SCL_PIN))) return false;
+  Wire.beginTransmission(candidate);
+  return Wire.endTransmission() != 0;
+}
+
 uint8_t i2c_begin(void) {
   pinMode(TWI_SDA_PIN, INPUT_PULLUP);
   pinMode(TWI_SCL_PIN, INPUT_PULLUP);
   Wire.begin();
 
-  /* A transmission to a free address gets no acknowledge, so the first address
-     that does not answer is the one this board takes. */
   uint8_t address = 0;
-  for (uint8_t candidate = FIRST_ADDRESS; candidate < LAST_ADDRESS; candidate++) {
-    Wire.beginTransmission(candidate);
-    if (Wire.endTransmission() != 0) {
-      address = candidate;
-      break;
+
+  /* A fixed address is tried on its own until it comes free. Nothing is
+     substituted for it, so a board keeps the number the rig knows it by. */
+  if (SLAVE_ADDRESS >= FIRST_ADDRESS && SLAVE_ADDRESS < LAST_ADDRESS) {
+    for (uint8_t pass = 0; pass < 6 && !address; pass++) {
+      if (addressFree(SLAVE_ADDRESS)) address = SLAVE_ADDRESS;
+      else delay(200);
     }
   }
+
+  /* Otherwise a transmission to a free address gets no acknowledge, so the
+     first address that does not answer is the one this board takes. The bus may
+     simply be busy at the instant the board comes up, which is not the same as
+     every address being taken, so the range is walked a few times. */
+  for (uint8_t pass = 0; !address && pass < 3; pass++) {
+    for (uint8_t candidate = FIRST_ADDRESS; candidate < LAST_ADDRESS; candidate++) {
+      if (addressFree(candidate)) {
+        address = candidate;
+        break;
+      }
+    }
+    if (!address) delay(200);
+  }
+
   Wire.end();
 
   if (!address) return 0;

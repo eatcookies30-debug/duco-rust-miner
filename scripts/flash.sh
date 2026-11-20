@@ -4,18 +4,27 @@
 #   ./scripts/flash.sh firmware/asm_sketch                      # every board arduino-cli finds
 #   ./scripts/flash.sh firmware/asm_sketch /dev/ttyACM0 /dev/ttyACM1
 #   ./scripts/flash.sh --board arduino:avr:nano firmware/nano_i2c_sketch /dev/ttyUSB0
+#   ./scripts/flash.sh --board arduino:avr:nano --define SLAVE_ADDRESS=3 \
+#                      firmware/nano_i2c_sketch /dev/ttyUSB0
 #
 # The sketch folder name must match its .ino file (arduino-cli requirement).
 # Boards whose name arduino-cli cannot read (Nano clones on a CH340 chip show up
 # as "Unknown") need --board.
+#
+# --define NAME=VALUE passes -DNAME=VALUE to the compiler, which is how a board
+# gets its own fixed I2C address on a rig (see firmware/*/i2c_slave.h).
 # Requires arduino-cli: https://arduino.github.io/arduino-cli/installation/
 set -u
 
 BOARD=""
+DEFINES=()
 ARGS=()
 while [ $# -gt 0 ]; do
     if [ "$1" = "--board" ]; then
         BOARD="$2"
+        shift 2
+    elif [ "$1" = "--define" ]; then
+        DEFINES+=("$2")
         shift 2
     else
         ARGS+=("$1")
@@ -24,7 +33,7 @@ while [ $# -gt 0 ]; do
 done
 
 if [ ${#ARGS[@]} -lt 1 ]; then
-    echo "usage: flash.sh [--board FQBN] <sketch-dir> [port ...]" >&2
+    echo "usage: flash.sh [--board FQBN] [--define NAME=VALUE ...] <sketch-dir> [port ...]" >&2
     exit 2
 fi
 
@@ -34,6 +43,14 @@ if [ ! -d "$SKETCH" ]; then
     exit 1
 fi
 PORTS=("${ARGS[@]:1}")
+
+# Guarded so an empty array is safe under `set -u` on bash 4.3 and older.
+BUILD_PROPERTIES=()
+if [ ${#DEFINES[@]} -gt 0 ]; then
+    for d in "${DEFINES[@]}"; do
+        BUILD_PROPERTIES+=(--build-property "build.extra_flags=-D$d")
+    done
+fi
 
 # Detect the connected boards when no ports are given.
 if [ ${#PORTS[@]} -eq 0 ]; then
@@ -54,7 +71,8 @@ for port in $PORTS; do
         continue
     fi
     echo "== $port -> $fqbn"
-    out=$(timeout 240 arduino-cli compile --upload --fqbn "$fqbn" --port "$port" "$SKETCH" 2>&1)
+    out=$(timeout 240 arduino-cli compile --upload --fqbn "$fqbn" --port "$port" \
+          ${BUILD_PROPERTIES[@]+"${BUILD_PROPERTIES[@]}"} "$SKETCH" 2>&1)
     echo "$out" | grep -E "Sketch uses|Global|error|No device found" || echo "$out" | tail -3
     sleep 3
 done

@@ -136,7 +136,7 @@ void setup() {
     Serial.print("I2C slave address: ");
     Serial.println(address);
   } else {
-    Serial.println("I2C: every bus address is taken, serial only");
+    Serial.println("I2C: no address available (bus busy, SLAVE_ADDRESS taken, or every address used) - serial only");
   }
 }
 

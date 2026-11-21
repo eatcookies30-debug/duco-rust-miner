@@ -198,8 +198,8 @@ void setup() {
   while (!Serial)
     ;
 
-  /* Weak internal pull-ups hold the lines from floating. Seven boards in
-     parallel gives about 6 kOhm, which is well inside what the bus tolerates. */
+  /* Weak internal pull-ups hold the lines from floating. Boards wired to the
+     same net put theirs in parallel, which only makes the lines stronger. */
   pinMode(TWI_SDA_PIN, INPUT_PULLUP);
   pinMode(TWI_SCL_PIN, INPUT_PULLUP);
 

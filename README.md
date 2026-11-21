@@ -45,6 +45,8 @@ Driven over the I2C bus rather than USB serial, the same Nano sketch measures
 measures 763 H/s on the same Nano over USB serial and 727 H/s over the I2C bus;
 it is the firmware that would fit an 8 KB chip, and it is about 43% of the
 assembly core's speed (see [A core for an 8 KB board](#a-core-for-an-8-kb-board)).
+Six of those Nano boards on one bench master measured 1,757 H/s each and 10,542 H/s
+for the rig (see [More than one board on the bus](#more-than-one-board-on-the-bus)).
 
 Typical bench output for the assembly core on a Mega:
 
@@ -492,10 +494,26 @@ The job the bench sends is SHA-1(`ba29a15896fd2d792d5c4b60668bf2b9feebc51d` +
 board's own DUCOID. Driving a Nano this way measures 1,590 H/s against 1,759 H/s
 on the same board over USB serial: the search runs in the main loop while the TWI
 interrupts serve the bus, so the difference is the cost of the polls, since the
-master has to ask for the answer one byte at a time. Those figures are from a
-single slave on the bus - the round-robin over several boards at once has not been
-measured, so per-board hashrate with N boards searching simultaneously is still
-untested.
+master has to ask for the answer one byte at a time.
+
+Six Nano 328P slaves on one Mega 2560 master at 100 kHz, wired as above, searched
+at the same time:
+
+```
+slave 1: nonce 9999 OK, 1757 H/s  (18/18 so far)
+Totals: 6 slaves, 366 jobs, 360 correct, 0 wrong, 0 of 31476 job bytes unacked, 10542 H/s across the 6 mining slaves
+```
+
+Every reply the master collected was the nonce it expected, nothing needed a
+resend, and not one of the 31,476 job bytes went unacknowledged. Each of the six
+boards measured 1,757 H/s for itself - 1,759 H/s is what the same boards report
+over USB serial, so sharing the bus cost each of them about 1%, and the bus total
+is 10,542 H/s because the total is the sum of what each board measured on its own.
+A board polled every round came in at 1,590 H/s; with six boards on the bus each
+one is polled a sixth as often, which is where the extra speed comes from. A job
+costs the master about 121 bus transfers (86 job bytes out, roughly 35 reply bytes
+back), so the round-robin walk, not the boards, is what limits how big this rig
+can get.
 
 The job and reply handling can also be exercised on a desktop, without a board,
 with `firmware/i2c_slave_test`:
@@ -730,12 +748,16 @@ Settings.cfg.example      template for the official-format config file
   was measured on a physical bus, not just in code: `firmware/i2c_bench` on a Mega
   2560 drove a Nano 328P slave over D20/D21 to A4/A5 at 100 kHz for 320 s, 12 jobs
   went out and 12 came back with the nonce the bench expects, with no job byte
-  unacknowledged and no job needing a resend (1,590 H/s on that Nano). The same
-  glue was checked with the roles swapped - bench on the Nano, Mega as the slave -
-  and 9 jobs out gave 9 correct replies at 1,637 H/s. What has not been tested is a
-  master from the reference rig implementations - ESP32, ESP8266, Raspberry Pi -
-  since the bench in this repo is its own master and the master half of a real rig
-  is somebody else's firmware.
+  unacknowledged and no job needing a resend (1,590 H/s on that Nano). Six Nano
+  328P slaves on that same master ran at once: 366 jobs went out, the 360 replies
+  the master had collected were all correct, none of the 31,476 job bytes was
+  unacknowledged, and every board measured 1,757 H/s for itself. One reply came
+  back truncated the instant the boards were first wired up, and it did not recur.
+  The same glue was checked with the roles swapped - bench on the Nano, Mega as the
+  slave - and 9 jobs out gave 9 correct replies at 1,637 H/s. What has not been
+  tested is a master from the reference rig implementations - ESP32, ESP8266,
+  Raspberry Pi - since the bench in this repo is its own master and the master half
+  of a real rig is somebody else's firmware.
 * The bare-metal build in `firmware/tiny85` was measured on an ATmega328P Nano
   and nothing else. The ATmega8, ATmega16 and ATmega168P builds compile against
   the same register-level TWI and UART driver, but no board of those kinds was

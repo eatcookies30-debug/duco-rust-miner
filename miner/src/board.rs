@@ -12,19 +12,19 @@
 use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::sync::mpsc::{self, Receiver};
+use std::sync::Mutex;
 use std::process::Command;
 use std::thread;
 use std::time::Duration;
 
 pub struct Board {
     pub port: String,
-    file: Option<std::fs::File>,
+    file: Mutex<std::fs::File>,
     rx: Receiver<String>,
-    deadline: Duration,
 }
 
 impl Board {
-    pub fn open(port: &str, deadline: Duration) -> Result<Board, String> {
+    pub fn open(port: &str) -> Result<Board, String> {
         // The kernel tty needs the right baud; the boards always run at 115200.
         let status = Command::new("stty")
             .arg("-F")
@@ -41,6 +41,8 @@ impl Board {
         };
 
         let (tx, rx) = mpsc::channel();
+        /* A duplicate of the same file descriptor, held by the reader thread so
+           the mining thread can write without queueing behind a blocked read. */
         let mut reader = file.try_clone().map_err(|e| format!("{port}: {e}"))?;
         let port_display = port.to_string();
         let port_log = port_display.clone();
@@ -76,33 +78,32 @@ impl Board {
             }
         });
 
-        let mut b = Board {
+        let board = Board {
             port: port_display,
-            file: Some(file),
+            file: Mutex::new(file),
             rx,
-            deadline,
         };
 
         // Opening the port toggles DTR, which resets an AVR board. Give the
         // sketch time to boot before we ask it for anything.
         thread::sleep(Duration::from_millis(2500));
-        b.drain();
-        Ok(b)
+        board.drain();
+        Ok(board)
     }
 
-    fn drain(&mut self) {
+    fn drain(&self) {
         // Throw away anything the board said before we asked for a job.
         while self.rx.recv_timeout(Duration::from_millis(400)).is_ok() {}
     }
 
     /// Drop any reply the board sent for a job we already gave up on.
-    pub fn discard_pending(&mut self) {
+    pub fn discard_pending(&self) {
         while self.rx.recv_timeout(Duration::from_millis(400)).is_ok() {}
     }
 
-    pub fn send_job(&mut self, prev: &str, target: &str, difficulty: u32) -> Result<(), String> {
+    pub fn send_job(&self, prev: &str, target: &str, difficulty: u32) -> Result<(), String> {
         let line = format!("{prev},{target},{difficulty},\n");
-        let file = self.file.as_mut().ok_or("board closed")?;
+        let mut file = self.file.lock().map_err(|_| "board closed".to_string())?;
         file.write_all(line.as_bytes())
             .map_err(|e| format!("write to {} failed: {e}", self.port))?;
         file.flush().ok();
@@ -110,7 +111,7 @@ impl Board {
     }
 
     /// Read one reply line from the board.
-    pub fn read_reply(&mut self, allowance: Duration) -> Result<(u64, u64, String), String> {
+    pub fn read_reply(&self, allowance: Duration) -> Result<(u64, u64, String), String> {
         match self.rx.recv_timeout(allowance) {
             Ok(reply) => {
                 if reply.is_empty() {
@@ -125,20 +126,75 @@ impl Board {
                 let ducoid = parts.get(2).unwrap_or(&"").to_string();
                 Ok((nonce, elapsed, ducoid))
             }
-            Err(_) => Err(format!("no reply from {} within {}s", self.port, allowance.as_secs())),
+            Err(_) => Err(format!(
+                "no reply from {} within {}s",
+                self.port,
+                allowance.as_secs()
+            )),
         }
     }
 
-    pub fn search(&mut self, prev: &str, target: &str, difficulty: u32) -> Result<(u64, u64, String), String> {
-        // A reply left in the buffer from a job we already gave up on would be
-        // read as the answer to this one.
-        self.discard_pending();
-        self.send_job(prev, target, difficulty)?;
-        self.read_reply(self.deadline)
+    /* Whatever went wrong, the surest recovery is to reset the board: opening
+       the port toggles DTR, which restarts the sketch with an empty serial
+       buffer. Without this a board that mis-frames one job can sit searching a
+       stale target for minutes and look dead. */
+    pub fn reopen(&self) -> Result<(), String> {
+        let file = OpenOptions::new()
+            .write(true)
+            .open(&self.port)
+            .map_err(|e| format!("could not reopen {}: {e}", self.port))?;
+        let mut guard = self.file.lock().map_err(|_| "board closed".to_string())?;
+        *guard = file;
+        drop(guard);
+        thread::sleep(Duration::from_millis(2500));
+        self.drain();
+        Ok(())
     }
+}
 
-    pub fn close(&mut self) {
-        self.file = None;
+/// The same protocol through the rig master: the master is the only board on
+/// the USB side of a rig, and it shuttles jobs to the boards on the I2C bus.
+pub struct RigBoard {
+    rig: std::sync::Arc<crate::rig::Rig>,
+    pub address: u8,
+}
+
+impl RigBoard {
+    pub fn new(rig: std::sync::Arc<crate::rig::Rig>, address: u8) -> RigBoard {
+        RigBoard { rig, address }
+    }
+}
+
+/// A board the miner can hand a job to, whether it is plugged into the PC or
+/// hanging off a rig master.
+pub trait Link {
+    fn send(&self, prev: &str, target: &str, difficulty: u32) -> Result<(), String>;
+    fn reply(&self, allowance: Duration) -> Result<(u64, u64, String), String>;
+    fn reopen(&self) -> Result<(), String>;
+}
+
+impl Link for Board {
+    fn send(&self, prev: &str, target: &str, difficulty: u32) -> Result<(), String> {
+        self.discard_pending();
+        self.send_job(prev, target, difficulty)
+    }
+    fn reply(&self, allowance: Duration) -> Result<(u64, u64, String), String> {
+        self.read_reply(allowance)
+    }
+    fn reopen(&self) -> Result<(), String> {
+        self.reopen()
+    }
+}
+
+impl Link for RigBoard {
+    fn send(&self, prev: &str, target: &str, difficulty: u32) -> Result<(), String> {
+        self.rig.give(self.address, prev, target, difficulty)
+    }
+    fn reply(&self, allowance: Duration) -> Result<(u64, u64, String), String> {
+        self.rig.take(self.address, allowance)
+    }
+    fn reopen(&self) -> Result<(), String> {
+        self.rig.ping()
     }
 }
 

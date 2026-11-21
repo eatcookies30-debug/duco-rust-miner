@@ -436,6 +436,6 @@ if __name__ == "__main__":
     compact = "--compact" in sys.argv[1:]
     # Default is a scratch file; pass the sketch's header to regenerate the core
     # that actually gets flashed:
-    #   python3 gen_asm.py ../asm_sketch/duco_rounds.h
-    #   python3 gen_asm.py --compact ../nano_i2c_sketch/duco_rounds.h
+    #   python3 gen_asm.py duco_rounds_mega.h
+    #   python3 gen_asm.py --compact duco_rounds_328p.h
     emit(args[0] if args else "rounds_body.inc", compact)

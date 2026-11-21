@@ -21,7 +21,7 @@ exact command line, including the flags
 **Board and firmware**
 
 - Board: (Mega 2560 / Uno / Nano / other)
-- Sketch flashed: `firmware/asm_sketch` / `firmware/c_core` / `firmware/official_sketch` / other
+- Sketch flashed: `firmware/board_sketch` / `firmware/i2c_rig` / `firmware/baremetal` / other
 - Flash report from the compile:
 
 ```

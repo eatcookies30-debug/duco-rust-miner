@@ -20,7 +20,8 @@ rounds_body.inc
 # the desktop I2C glue test is built in place
 firmware/i2c_slave_test/slave_test
 
-# firmware/tiny85/build.sh writes the .elf and .hex next to the source; build
-# them yourself, they are chip specific
-firmware/tiny85/*.elf
-firmware/tiny85/*.hex
+# the bare-metal builds write their .elf and .hex next to the source; they are
+# chip specific, so build them yourself rather than carry them in the repo
+firmware/baremetal/*.elf
+firmware/baremetal/*.hex
+firmware/baremetal/*.lst

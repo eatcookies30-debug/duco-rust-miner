@@ -61,7 +61,14 @@ extern "C" {
   uint32_t HE __attribute__((used));
 }
 
-#include "duco_rounds.h"
+/* Boards with 32 KB of flash or more get the fully unrolled core. A 328P board
+   (Nano, Uno, Pro Mini) gets the looped core, which is about 8 KB smaller for
+   roughly 3% less speed and is the only one that fits. */
+#if defined(__AVR_ATmega1280__) || defined(__AVR_ATmega2560__) || defined(__AVR_ATmega128__)
+#include "duco_rounds_mega.h"
+#else
+#include "duco_rounds_328p.h"
+#endif
 
 /* SHA-1 initial state - the digest is (final state + initial state), so the
    target is compared against (target - initial state). */

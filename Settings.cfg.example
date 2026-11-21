@@ -4,6 +4,9 @@
 [AVR Miner]
 username = your-duino-coin-username
 avrport = /dev/ttyACM0,/dev/ttyACM1
+# Boards on an I2C rig are not plugged into the PC: they hang off a rig master,
+# and the miner talks to the master. List the master's port here.
+rigport = /dev/ttyACM1
 donate = 0
 language = english
 identifier = Mega 2560,Mega 2560

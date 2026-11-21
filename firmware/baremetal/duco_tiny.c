@@ -5,16 +5,16 @@
   about 5 KB before any of the mining code is counted, and the I2C glue is
   another 2 KB. A board with 8 KB of program flash has no room for them, so
   this file drives the TWI and UART registers itself and uses the small search
-  core from firmware/tiny_core.
+  core in tiny_hash.c, next to it.
 
   Two ways to hand it a job, exactly like the Arduino sketches:
 
     serial - "prevHash,targetHash,difficulty\n" in, "nonce,elapsed,DUCOID\n"
              out with the nonce and the elapsed time written as binary digits.
              This needs a chip with a UART, which the ATmega8, the ATmega16 and
-             the 168/328/1280/2560 family all have. An ATtiny85 has neither a
-             UART nor a TWI module, so there is no way to hand it a job at all
-             and the build for it is a size check only.
+             the 168/328/1280/2560 family all have. The ATtiny family has
+             neither a UART nor a TWI module, so those chips use
+             duco_attiny.c, which bit-bangs the bus instead.
 
     I2C    - the DuinoCoinI2C rig protocol (https://github.com/ricaun/DuinoCoinI2C):
              the master pushes the job one byte per transmission and polls for
@@ -23,14 +23,13 @@
 
   Everything is guarded by what the chip has: the TWI driver is compiled in
   only for chips with a TWI module, the UART driver only for chips with a
-  UART. firmware/tiny85/README.md has the measured flash and RAM figures for
-  ATmega8, ATmega16 and ATtiny85.
+  UART. The README has the measured flash and RAM figures for every chip.
 
   Build and flash:
 
       ./build.sh atmega328p
       avrdude -c arduino -p atmega328p -P /dev/ttyUSB0 \
-              -U flash:w:duco_tiny_atmega328p.hex
+              -U flash:w:duco_atmega328p.hex
 
   (with -C pointing at your avrdude.conf if avrdude cannot find one on its own;
   the programmer id is `arduino`, the one the Arduino bootloader speaks, not

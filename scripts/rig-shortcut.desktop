@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Duino-Coin Rig
+GenericName=Duino-Coin Arduino miner
+Comment=Mine DUCO with the boards on USB and the boards behind the rig master
+Exec=/path/to/duco-rust-miner/scripts/start-rig.sh /path/to/Settings.cfg
+Path=/path/to/duco-rust-miner
+Terminal=true
+StartupNotify=true
+Categories=Utility;
+Keywords=duco;duino;miner;rig;avr;mega;nano;

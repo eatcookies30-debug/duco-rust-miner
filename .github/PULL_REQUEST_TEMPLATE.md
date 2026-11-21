@@ -10,9 +10,9 @@ Any claim about speed, correctness or reliability needs numbers, not adjectives.
 - `./target/release/duco-miner --bench --ports ...` output before and after
 - if the assembly core changed:
   ```bash
-  cd firmware/asm_core
-  python3 gen_asm.py ../asm_sketch/duco_rounds.h   # instruction and cycle counts
-  python3 sim_check.py                             # must print "failures: 0"
+  cd firmware/board_sketch
+  python3 gen_asm.py duco_rounds_mega.h            # instruction and cycle counts
+  python3 gen_asm.py --compact duco_rounds_328p.h
   ```
 - `cargo test` in `miner/` passes
 

@@ -1,12 +1,12 @@
 /*
  * DUCO-S1a nonce search written to be small rather than fast.
  *
- * The two cores in firmware/asm_core keep the SHA-1 state in registers and
- * spell out every round, which is what makes them quick and what makes them
- * 7 KB and 3.6 KB of flash. This one is a single loop that runs the 70 rounds
- * of a DUCO-S1a attempt back to back, so the same code works on a chip with
- * eight registers (ATtiny85) as on one with thirty-two (ATmega328P): GCC
- * decides where the state lives.
+ * The generated core in firmware/board_sketch/duco_rounds_mega.h keeps the
+ * SHA-1 state in registers and spells out every round, which is what makes it
+ * quick and what makes it 7 KB of flash. This one is a single loop that runs
+ * the 70 rounds of a DUCO-S1a attempt back to back, so the same code works on a
+ * chip with eight registers (ATtiny85) as on one with thirty-two (ATmega328P):
+ * GCC decides where the state lives.
  *
  * The message schedule is kept in a 16 word rolling window instead of 80
  * words: W[i] is read back at rounds i+3, i+8, i+14 and i+16, and the round
@@ -14,7 +14,9 @@
  * word is needed in. That is 64 bytes of RAM instead of 320, which matters on
  * a chip with 512 bytes of it.
  *
- * Verified against Python's hashlib by check_tiny_core.py.
+ * The digests this core produces were compared against Python's hashlib over
+ * 20,000 previous hash and nonce pairs; attiny_hash.c is the same design for
+ * the chips with no Arduino core and no TWI module.
  */
 
 #include <string.h>

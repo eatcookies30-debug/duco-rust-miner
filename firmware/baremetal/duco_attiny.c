@@ -141,6 +141,15 @@ static void feed(char c) {
       pins |= 4;                            /* searching */
     } else {
       work = 0;                             /* a job line with no difficulty */
+      /* A job line that cannot be mined still has to be answered, or the master
+         goes on believing this board is searching and never sends it another
+         job. A zero nonce is the reply the miner discards and re-sends. */
+      REPLY[0] = '0';
+      REPLY[1] = ',';
+      REPLY[2] = '0';
+      REPLY[3] = '\n';
+      replyLen = 4;
+      replyPos = 0;
     }
   } else if (FIELD() == 0 && seen < 40) {
     uint8_t n = nibble(c);

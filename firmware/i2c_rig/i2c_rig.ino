@@ -31,6 +31,14 @@
                    there, which is bus traffic that mines nothing.
   RESCAN_SECONDS    how often the master walks the bus again, so a board plugged
                    in later joins without restarting anything.
+  MAX_SEARCH_MS    how long a board is allowed to search one job. A job line
+                   that arrives with a byte missing is refused by the board, and
+                   without this the master would go on believing that board is
+                   still searching and never hand it another job. Sixty five
+                   thousand hashes - the biggest search the protocol allows - is
+                   under 40 s on a 16 MHz AVR, so 90 s is roomy. Raise it for
+                   boards that run slower than 16 MHz, such as an ATtiny still on
+                   its factory 1 MHz clock.
 
   The on-board LED double-flashes for every share the rig brings back, from any
   board on the bus.
@@ -42,6 +50,7 @@
 #define LAST_ADDRESS       40
 #define RESCAN_SECONDS     60
 #define SILENCE_TIMEOUT_MS 20000
+#define MAX_SEARCH_MS      90000
 
 /* ---------------------------------------------------------------- */
 
@@ -57,9 +66,8 @@
 
 /* The on-board LED is pin 13 on both families, but pin 13 is bit 5 of port B on
    a 328P and bit 7 of port B on a 1280/2560, so the bit has to be picked per
-   chip. Writing the port directly is what lets the LED blink while a search is
-   running: digitalWrite() cannot be called from the timer interrupt that drives
-   the blink. */
+   chip. Writing the port directly is what lets the flash work the same way on
+   either board. */
 #if defined(__AVR_ATmega328P__) || defined(__AVR_ATmega328__) || \
     defined(__AVR_ATmega168P__) || defined(__AVR_ATmega168__)
 #define LED_PORT PORTB
@@ -111,6 +119,7 @@
 struct Slave {
   uint8_t address;
   bool searching;              /* a job is in flight and no line has come back */
+  unsigned long searchStart;   /* when that job went out on the bus */
   char reply[48];
   uint8_t replyLen;
   char job[88];                /* the job text, newline included */
@@ -272,32 +281,72 @@ static void discover(void) {
 /* One transmission per byte, exactly like the reference rig masters. A byte the
    slave does not acknowledge is sent again, because a short job is simply
    dropped by the slave and the master would otherwise sit and wait on a job
-   that never arrived. */
-static void sendJob(uint8_t address, const char *job, uint8_t len) {
-  for (uint8_t i = 0; i < len; i++) {
-    /* Sending a job takes a hundred trips round the bus while the miner is
-       writing the next job to the serial port. The board's receive buffer is
-       only 64 bytes, so every byte put on the bus is also a chance to take in
-       what has arrived on serial. */
-    readSerialLines();
-    bool written = false;
-    for (uint8_t attempt = 0; attempt < JOB_ATTEMPTS && !written; attempt++) {
-      waitForIdleBus();
-      if (!busIdle()) continue;
-      Wire.beginTransmission(address);
-      Wire.write(job[i]);
-      written = Wire.endTransmission() == 0;
+   that never arrived.
+
+   If a byte still does not get through, the board is left holding half a job
+   line and there is no way to take those bytes back. A newline makes the board
+   throw the half line away as a job it cannot mine, and the whole job is then
+   sent again from the beginning. Without that, the mangled line is what the
+   board works on, the board never answers, and the master spends the rest of
+   the session waiting for a share that was never going to come. */
+static bool sendJob(uint8_t address, const char *job, uint8_t len) {
+  for (uint8_t line = 0; line < JOB_ATTEMPTS; line++) {
+    bool complete = true;
+    for (uint8_t i = 0; i < len && complete; i++) {
+      /* Sending a job takes a hundred trips round the bus while the miner is
+         writing the next job to the serial port. The board's serial receive
+         buffer is only 64 bytes, so every byte put on the bus is also a chance
+         to take in what has arrived on serial. */
+      readSerialLines();
+      bool written = false;
+      for (uint8_t attempt = 0; attempt < JOB_ATTEMPTS && !written; attempt++) {
+        waitForIdleBus();
+        if (!busIdle()) continue;
+        Wire.beginTransmission(address);
+        Wire.write(job[i]);
+        written = Wire.endTransmission() == 0;
+      }
+      if (!written) {
+        bytesNacked++;
+        complete = false;
+      }
+      sends++;
     }
-    if (!written) bytesNacked++;
-    sends++;
+    if (complete) return true;
+
+    waitForIdleBus();
+    if (busIdle()) {
+      Wire.beginTransmission(address);
+      Wire.write('\n');
+      Wire.endTransmission();
+    }
   }
+  return false;
 }
 
 static void dispatch(Slave &s) {
-  sendJob(s.address, s.job, s.jobLen);
+  /* The flag goes up before a single byte leaves. sendJob spends a hundred bus
+     trips on a job line, and it drains the serial port as it goes so the
+     miner's next job is not left unread - which is exactly the moment a second
+     GIVE for this same board would otherwise be handled. Sending two job lines
+     into one board before it has taken the first is how a rig ends up with
+     boards that look dead: the second line runs into the end of the receive
+     buffer, the board refuses it, and the master goes on waiting for a share
+     that was never going to come. */
+  s.searching = true;
+  s.searchStart = millis();
+  if (!sendJob(s.address, s.job, s.jobLen)) {
+    /* The job never made it onto the bus. Say so, so the miner can hand this
+       board a fresh job instead of waiting out the whole allowance. */
+    s.searching = false;
+    s.jobLen = 0;
+    Serial.print("MISS ");
+    Serial.print(s.address);
+    Serial.println(" job never reached the board");
+    return;
+  }
   /* The job text is spent once it has gone out on the bus. */
   s.jobLen = 0;
-  s.searching = true;
   s.replyLen = 0;
   s.attempts = 1;
   s.lastReplyAt = millis();
@@ -560,6 +609,25 @@ void loop() {
           Serial.print("/");
           Serial.print(s.jobs);
           Serial.println(" so far)");
+        }
+        continue;
+      }
+
+      /* A board that has answered nothing but newlines for longer than the
+         longest search the protocol can ask for has lost the job: the line got
+         to it with a byte missing and the board refused it. Without this the
+         master would keep believing the board is still searching, the job the
+         miner queued would never go out, and that board would mine nothing for
+         the rest of the session. */
+      if (millis() - s.searchStart > (unsigned long)MAX_SEARCH_MS) {
+        s.searching = false;
+        s.replyLen = 0;
+        if (!poolDriven) {
+          Serial.print("slave ");
+          Serial.print(s.address);
+          Serial.print(": no share in ");
+          Serial.print(MAX_SEARCH_MS / 1000);
+          Serial.println(" s, the job it was given was not a job it could mine");
         }
         continue;
       }

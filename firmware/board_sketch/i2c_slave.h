@@ -33,9 +33,10 @@
 #endif
 
 /* Two 40 character hashes, a difficulty and the separators come to 86 bytes.
-   The ring is one job wide plus room for the bytes of the next job that are
-   already on their way while this board is still working. */
-#define JOB_LIMIT 128
+   The ring is 256 bytes because jobHead and jobTail are uint8_t: it holds one
+   job with room to spare, so a job still arriving while the board is working on
+   one does not run off the end of the buffer. */
+#define JOB_LIMIT 256
 /* "nonce,elapsed,DUCOID\n" - the longest line the protocol can produce. */
 #define RESP_LIMIT 48
 
@@ -61,6 +62,15 @@ static void rigReceive(int count) {
     if (c == '?') {
       replyNext = 0;
       continue;
+    }
+    /* A newline is the end of a job line, so a new job has just arrived. The
+       answer to the old one is no longer anybody's business, and leaving it in
+       the reply buffer is how a board hands the master the previous share as
+       the reply to the job it was just given. Clearing it here means every poll
+       from now on gets the bare newline that means "still searching". */
+    if (c == '\n') {
+      replyLen = 0;
+      replyNext = 0;
     }
     if ((uint8_t)(jobHead - jobTail) >= JOB_LIMIT - 1) {
       /* The buffer filled before the main loop could take a job out of it. A
@@ -219,7 +229,21 @@ bool i2c_take_job(char *prevHash, char *targetHash, uint32_t *difficulty) {
      ring for the next pass. */
   jobTail = (uint8_t)(end + 1);
 
-  if (prevLen != 40 || targetLen != 40 || digits == 0) return false;
+  /* A job line that arrived whole but is malformed - a byte of it lost on the
+     bus - cannot be mined. Answering it with a zero nonce tells the master that
+     the job was taken, so the master stops waiting for a share that will never
+     arrive and the miner sends the job again. Saying nothing would leave the
+     master certain that this board is still searching, and the board idle for
+     the rest of the session. */
+  if (prevLen != 40 || targetLen != 40 || digits == 0) {
+    reply[0] = '0';
+    reply[1] = ',';
+    reply[2] = '0';
+    reply[3] = '\n';
+    replyLen = 4;
+    replyNext = 0;
+    return false;
+  }
   prevHash[40] = 0;
   targetHash[40] = 0;
   *difficulty = d;

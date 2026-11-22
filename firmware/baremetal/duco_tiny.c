@@ -209,6 +209,16 @@ MAY_BE_UNUSED static uint8_t appendBinary(char *out, uint8_t pos, uint32_t value
 }
 
 MAY_BE_UNUSED static void pushJobByte(char c) {
+  /* A newline is the end of a job line, so a new job has just arrived. The
+     answer to the previous one is no longer anybody's business: if it is still
+     sitting in the reply buffer the master reads it as the reply to the job it
+     just sent, and a share that belongs to an older job is worth more than the
+     board's next one. Clearing it here makes every poll from now on return the
+     bare newline that means "still searching". */
+  if (c == '\n') {
+    i2cReplyLen = 0;
+    i2cReplyNext = 0;
+  }
   /* Bytes arriving while the board is busy with a job it already took are
      dropped rather than stored. Two masters writing into one ring is the only
      way a job line can end up spliced onto somebody else's bytes, which reads
@@ -223,6 +233,20 @@ MAY_BE_UNUSED static void pushJobByte(char c) {
     return;
   }
   jobIn[jobHead++] = c;
+}
+
+/* A job line that arrived whole but is malformed - a byte of it lost on the bus
+   - cannot be mined. Answering with a zero nonce tells the master the job was
+   taken, so it stops waiting for a share that will never come and the miner
+   sends the job again. Saying nothing would leave the master convinced this
+   board is still searching, and the board idle for the rest of the session. */
+MAY_BE_UNUSED static void refuseJob(void) {
+  i2cReply[0] = '0';
+  i2cReply[1] = ',';
+  i2cReply[2] = '0';
+  i2cReply[3] = '\n';
+  i2cReplyNext = 0;
+  i2cReplyLen = 4;
 }
 
 /* Take one newline terminated job out of the ring. Returns 0 while the job is
@@ -249,13 +273,19 @@ static uint32_t takeJob(void) {
   while (pos < len && n < 40 && jobIn[(uint8_t)(tail + pos)] != ',')
     prevHash[n++] = jobIn[(uint8_t)(tail + pos++)];
   jobTail = (uint8_t)(end + 1);
-  if (n != 40) return 0;
+  if (n != 40) {
+    refuseJob();
+    return 0;
+  }
   while (pos < len && jobIn[(uint8_t)(tail + pos)] == ',') pos++;
 
   n = 0;
   while (pos < len && n < 40 && jobIn[(uint8_t)(tail + pos)] != ',')
     targetHash[n++] = jobIn[(uint8_t)(tail + pos++)];
-  if (n != 40) return 0;
+  if (n != 40) {
+    refuseJob();
+    return 0;
+  }
   while (pos < len && jobIn[(uint8_t)(tail + pos)] == ',') pos++;
 
   uint32_t difficulty = 0;
@@ -266,7 +296,10 @@ static uint32_t takeJob(void) {
     digits++;
     pos++;
   }
-  if (digits == 0) return 0;
+  if (digits == 0) {
+    refuseJob();
+    return 0;
+  }
 
   prevHash[40] = 0;
   targetHash[40] = 0;

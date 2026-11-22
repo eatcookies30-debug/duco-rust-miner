@@ -33,18 +33,17 @@ reports.
 
 | firmware | board | flash | RAM | H/s |
 |---|---|---|---|---|
-| `firmware/board_sketch` | Mega 2560 | 37,168 B (14%) | 1,385 B | 1,782 |
-| `firmware/board_sketch` | Nano 328P clone | 26,604 B (86%) | 1,385 B | 1,757 |
-| `firmware/i2c_rig` (master) | Mega 2560 | 12,204 B (4%) | 2,165 B | - |
-| `firmware/baremetal` | Nano 328P clone | 4,510 B (14%) | 713 B | 763 |
-| `firmware/baremetal` | ATmega8 | 4,258 B (52%) | 729 B | not run |
-| `firmware/baremetal` | ATtiny45 | 3,928 B (96%) | 114 B | not run |
-| `firmware/baremetal` | ATtiny85 | 3,928 B (48%) | 114 B | not run |
+| `firmware/board_sketch` | Mega 2560 | 37,208 B (14%) | 1,513 B | 1,782 |
+| `firmware/board_sketch` | Nano 328P clone | 26,644 B (86%) | 1,513 B (73%) | 1,757 |
+| `firmware/i2c_rig` (master) | Mega 2560 | 12,552 B (4%) | 2,287 B | - |
+| `firmware/baremetal` | Nano 328P clone | 4,552 B (14%) | 713 B | 763 |
+| `firmware/baremetal` | ATmega8 | 4,298 B (52%) | 729 B | not run |
+| `firmware/baremetal` | ATtiny45 | 3,968 B (97%) | 114 B | not run |
+| `firmware/baremetal` | ATtiny85 | 3,968 B (48%) | 114 B | not run |
 
 The whole rig - one Mega on USB plus six Nanos on the bus - runs as **seven
-miners at 12.37 kH/s**, and a two minute run of that had 140 accepted shares
-and 2 rejected, both rejections being one board stepping up its difficulty
-tier (see [Difficulty tiers](#difficulty-tiers)).
+miners at 12.37 kH/s**, and a 200 second run of that had 224 accepted shares and
+nothing rejected, with every board reporting 1.76 kH/s for itself the whole time.
 
 Against the stock 4.3 sketch on the same boards: 5.3x on a Mega, 5.2x on a
 Nano. The Nano's 1,757 H/s over the I2C bus is 1% below what the same board
@@ -112,7 +111,7 @@ Both `avrport` (boards plugged into the PC) and `rigport` (the rig master) are
 read from it.
 
 `./scripts/start-rig.sh` does step 5 for the whole rig in one command, and
-`rig-shortcut.desktop` is a desktop shortcut for it. See
+`scripts/rig-shortcut.desktop` is a desktop shortcut for it. See
 [One shortcut for the whole rig](#one-shortcut-for-the-whole-rig).
 
 ## Each board's number on the rig
@@ -138,8 +137,9 @@ That is the whole procedure.
 
 The rig master has the same idea in its own USER SETTINGS block: `MAX_SLAVES`,
 `RIG_BUS_KHZ`, `FIRST_ADDRESS` / `LAST_ADDRESS` (which board numbers to look
-for) and `RESCAN_SECONDS` (how often it walks the bus again, so a board plugged
-in later joins without restarting anything).
+for), `RESCAN_SECONDS` (how often it walks the bus again, so a board plugged
+in later joins without restarting anything) and `MAX_SEARCH_MS` (how long a board
+may search one job before the master gives up on that job and sends it another).
 
 If `SLAVE_ADDRESS` is set to a number another board already holds, the sketch
 retries a few times and then falls back to walking 1 to 126 and taking the first
@@ -184,8 +184,8 @@ keep the leads short, and if replies start getting dropped, cut
 ## One shortcut for the whole rig
 
 `scripts/start-rig.sh` starts everything with one command, and
-`rig-shortcut.desktop` is a template for a desktop shortcut that does the same
-thing from the GUI:
+`scripts/rig-shortcut.desktop` is a template for a desktop shortcut that does the
+same thing from the GUI:
 
 ```bash
 ./scripts/start-rig.sh                              # reads ./Settings.cfg
@@ -367,22 +367,38 @@ every poll is answered with a bare `\n`, which is how the reference masters read
 "nothing yet" and simply poll again. The search runs in the main loop while the
 TWI interrupts serve the bus, so a board answering a rig is still mining.
 
-Two things the glue has to get right, because both are easy to get wrong in a way
-that makes a board look dead rather than slow:
+Three things the glue has to get right, because each is easy to get wrong in a
+way that makes a board look dead rather than slow:
 
 * **the master keeps pushing while the board is still searching.** The job
-  buffer is a 256 byte ring, a little more than two jobs wide. `jobHead` is
-  written only by the receive interrupt and `jobTail` only by the main loop, so
-  consuming one job cannot lose the bytes of the next one. When the ring is full
-  the interrupt ignores further bytes and sets a flag, and the main loop clears
-  the whole buffer before reading it again: a half stored job is dropped rather
-  than spliced onto the bytes that follow it, which would otherwise parse as a
-  job with the wrong hashes.
+  buffer is a 256 byte ring, about three jobs wide. `jobHead` is written only by
+  the receive interrupt and `jobTail` only by the main loop, so consuming one job
+  cannot lose the bytes of the next one. When the ring is full the interrupt
+  ignores further bytes and sets a flag, and the main loop clears the whole buffer
+  before reading it again: a half stored job is dropped rather than spliced onto
+  the bytes that follow it, which would otherwise parse as a job with the wrong
+  hashes.
 * **the interrupt fills the buffer while the main loop is scanning it.** The scan
   for a job's newline has to compare against the length it snapshotted when it
   started. Comparing against the live length instead makes a job still in transit
   look finished at the point the scan has reached, one character is dropped, the
   hashes come out short, the job is refused, and the board never answers.
+* **a byte can be lost on the bus.** A byte the board does not acknowledge is
+  sent again; if it still does not get through, the board is left holding half a
+  job line and nothing can take those bytes back. The master then sends a newline
+  so the board throws the half line away, and sends the whole job again. If the
+  job cannot be delivered at all the master says `MISS <address> job never
+  reached the board`, so the miner tries a new job at once instead of waiting out
+  the whole allowance. On the board's side, a job line that arrives whole but
+  malformed is answered with a zero nonce rather than silence - the miner checks
+  the hash, sees it is not the nonce it asked for, and sends the job again.
+
+That last part matters more than it looks. On a six board rig the first version of
+this firmware lost about half the boards within a minute: one dropped byte made a
+job unmineable, the board said nothing, the master kept believing it was still
+searching and never sent it another job, and those boards sat idle for the rest of
+the run. With the newline and the whole-line retry, a 224 share run had nothing
+rejected and all six boards measured 1.76 kH/s for the whole session.
 
 The AVR's serial receive buffer is 64 bytes and cannot be enlarged from a
 sketch, so the master feeds a job line in 16 byte chunks and drains the serial
@@ -392,6 +408,12 @@ master checks that SDA and SCL are both high before it starts a transaction. A
 START issued in the middle of somebody else's transaction leaves the TWI module
 waiting for a start condition with SDA held low, and that jams the bus for every
 board on it.
+
+As a backstop, `MAX_SEARCH_MS` in the master's USER SETTINGS bounds how long a
+board may search one job (90 s by default, roomy for the 65,501 hash maximum). If
+a board says nothing for longer than that, the master clears the flag and sends it
+the job the miner queued. Raise it if you hang slow boards off the bus - an ATtiny
+on its factory 1 MHz clock needs far more than 90 s for a big job.
 
 ## Boards too small for a sketch
 
@@ -445,10 +467,10 @@ time a search.
 
 | chip | flash | RAM |
 |---|---|---|
-| ATmega328P (Nano, Uno) | 4,510 B | 713 B |
-| ATmega168P | 4,510 B | 713 B |
-| ATmega8 | 4,258 B | 729 B |
-| ATmega16 | 4,392 B | 729 B |
+| ATmega328P (Nano, Uno) | 4,552 B | 713 B |
+| ATmega168P | 4,552 B | 713 B |
+| ATmega8 | 4,298 B | 729 B |
+| ATmega16 | 4,434 B | 729 B |
 
 **ATtiny45 and ATtiny85** have neither a TWI module nor a UART, so they cannot
 run a sketch and cannot be handed a job over serial: the only way to give one a
@@ -460,9 +482,9 @@ master's `RIG_BUS_KHZ` has to be 10 or less for ATtiny boards.
 
 | chip | flash | RAM | |
 |---|---|---|---|
-| ATtiny45 | 3,928 B of 4,096 B | 114 B of 256 B | 182 B of flash and 142 B of RAM to spare |
-| ATtiny85 | 3,928 B of 8,192 B | 114 B of 512 B | |
-| ATtiny25 | 3,886 B of 2,048 B | 114 B of 128 B | does not fit, see below |
+| ATtiny45 | 3,968 B of 4,096 B | 114 B of 256 B | 128 B of flash and about 70 B of RAM left over |
+| ATtiny85 | 3,968 B of 8,192 B | 114 B of 512 B | |
+| ATtiny25 | 3,940 B of 2,048 B | 114 B of 128 B | does not fit, see below |
 
 **Why the ATtiny25 cannot do it.** It is the smallest of the family: 2 KB of
 flash and 128 bytes of RAM. SHA-1's working set alone is 104 bytes - a 16-word
@@ -470,8 +492,8 @@ schedule window (64), the previous hash (20), the target digest (20) - and the
 round loop needs a stack frame on top of that: seven live 32-bit values is 28
 registers, and the AVR has 24 usable ones, so the extras spill to the stack.
 `attiny_mine` alone pushes 18 registers, and the bus interrupt pushes 15 more on
-top of it. Measured with the driver, the smallest honest version of this miner
-is 3,886 bytes of flash and 114 bytes of globals plus roughly 70 bytes of stack.
+top of it. Measured with the driver, the leanest honest version of this miner is
+3,940 bytes of flash and 114 bytes of globals plus roughly 70 bytes of stack.
 The ATtiny25 is out on both counts - nearly twice the flash and more RAM than the
 chip has - so **the ATtiny45 is the smallest ATtiny a DUCO-S1a miner can run
 on**. `build.sh` still accepts `attiny25` if you want to see the numbers for
@@ -627,11 +649,11 @@ Four more that only bite a build with no Arduino libraries in it, like
 
 ## Troubleshooting
 
-* **"Sketch uses 37168 bytes (115%)"** or **"text section exceeds available space
-  in board"** - the unrolled core does not fit in an ATmega328P's 30,720 B of
-  program flash once the Wire library is in the sketch. `board_sketch.ino`
+* **"text section exceeds available space in board"** - the unrolled core does
+  not fit in an ATmega328P's 30,720 B of program flash: on its own, before the
+  Wire library and the I2C glue, it is already 30,708 B. `board_sketch.ino`
   picks the looped core automatically for those chips, so this only happens if
-  the chip macro is wrong for the board you are building for.
+  the chip macro does not match the board you are building for.
 * **"Permission denied" opening `/dev/ttyACM0`** - serial ports belong to the
   `dialout` group on most Linux distros:
 
@@ -693,8 +715,8 @@ firmware/i2c_rig/           the rig master: i2c_rig.ino
 firmware/baremetal/         register-level miners with no Arduino core: duco_tiny.c
                             + tiny_hash.c for ATmega8/16/168/328, duco_attiny.c
                             + attiny_hash.c for ATtiny45/85, build.sh
-scripts/                    flash.sh, start-rig.sh, set-mining-key.sh, balance.sh
-rig-shortcut.desktop        template for a desktop shortcut that runs the whole rig
+scripts/                    flash.sh, start-rig.sh, set-mining-key.sh, balance.sh,
+                            rig-shortcut.desktop (template for a desktop shortcut)
 Settings.cfg.example        template for the official-format config file
 ```
 
@@ -728,9 +750,12 @@ cd miner && cargo test
   are exercised here.
 * The I2C slave is the community rig protocol from
   `ricaun/DuinoCoinI2C`, and it was measured on a physical bus: six Nano 328P
-  slaves on one Mega 2560 master at 100 kHz for several minutes, 366 jobs out
-  and every reply the master collected correct, none of the 31,476 job bytes
-  unacknowledged, every board measuring 1,757 H/s for itself. What has not been
+  slaves on one Mega 2560 master at 100 kHz. The self-test passes with 366 jobs
+  out, every reply the master collected correct and none of the 31,476 job bytes
+  unacknowledged, and every board measuring 1,757 H/s for itself. Bytes do get
+  lost on a real bus occasionally, which is why the master resends a whole job
+  line when a byte fails three times and why the board answers a job line it
+  cannot parse with a zero nonce instead of saying nothing. What has not been
   tested is a master from the reference rig implementations - ESP32, ESP8266,
   Raspberry Pi - since the master in this repo is its own.
 * The bare-metal ATmega build was measured on an ATmega328P Nano and nothing

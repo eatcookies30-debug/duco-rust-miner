@@ -355,26 +355,72 @@ fn sha1_hex(s: &str) -> String {
     hex(&sha1(s.as_bytes()))
 }
 
+/* Replies arrive in the order the jobs were sent, so the first line a board
+   hands back can belong to a job it was still searching when this one was
+   handed over. A reply is only believed when the nonce in it really hashes to
+   the target that was asked for; otherwise the job is sent again. */
+fn ask_for(
+    label: &str,
+    out: &Out,
+    link: &dyn Link,
+    prev: &str,
+    target: &str,
+    difficulty: u32,
+    allowance: Duration,
+) -> Option<(u64, u64, String)> {
+    let start = Instant::now();
+    for attempt in 1..=3 {
+        let spent = start.elapsed();
+        if spent >= allowance {
+            out.say(
+                label,
+                &format!("{label} did not answer the job within {}s", allowance.as_secs()),
+                "error",
+            );
+            return None;
+        }
+        if let Err(e) = link.send(prev, target, difficulty) {
+            out.say(label, &format!("could not send the job: {e}", ), "error");
+            return None;
+        }
+        match link.reply(allowance - spent) {
+            Ok((nonce, elapsed, ducoid)) => {
+                if sha1_hex(&format!("{prev}{nonce}", )) == target {
+                    return Some((nonce, elapsed, ducoid));
+                }
+                out.say(
+                    label,
+                    &format!(
+                        "reply {} is not the nonce for this job, sending the job again (attempt {attempt})",
+                        nonce
+                    ),
+                    "warning",
+                );
+            }
+            Err(e) => {
+                out.say(label, &e, "error");
+                return None;
+            }
+        }
+    }
+    out.say(label, "no reply matched the job after three tries", "error");
+    None
+}
+
 /* Nonce 50 sits inside the range difficulty 10 allows, so a board that answers
    at all answers quickly and the number measures the trip as well as the hash.
    It is the same test the pool's own difficulty tiers are built from. */
 fn test_rate(label: &str, out: &Out, link: &dyn Link, timeout: Duration) -> Option<f64> {
     let target = hex(&sha1(format!("{TEST_PREV}50").as_bytes()));
-    if let Err(e) = link.send(TEST_PREV, &target, 10) {
-        out.say(label, &format!("could not send the test job: {e}", ), "error");
-        return None;
-    }
-    match link.reply(timeout) {
-        Ok((nonce, elapsed, _)) => {
+    match ask_for(label, out, link, TEST_PREV, &target, 10, timeout) {
+        Some((nonce, elapsed, _)) => {
             if elapsed == 0 {
-                return Some(0.0);
+                out.say(label, "the board reported no elapsed time for the test job", "error");
+                return None;
             }
             Some(nonce as f64 / (elapsed as f64 / 1e6))
         }
-        Err(e) => {
-            out.say(label, &e, "error");
-            None
-        }
+        None => None,
     }
 }
 
@@ -444,12 +490,8 @@ fn run_board_test(label: &str, cfg: &Config, out: &Out, link: &dyn Link) {
 
     for (nonce, diff) in [(9_999u64, 100u32), (42_424u64, 655u32), (65_500u64, 655u32)] {
         let target = hex(&sha1(format!("{TEST_PREV}{nonce}").as_bytes()));
-        if let Err(e) = link.send(TEST_PREV, &target, diff) {
-            out.say(label, &format!("diff {diff}: {e}", ), "error");
-            continue;
-        }
-        match link.reply(cfg.board_timeout) {
-            Ok((found, elapsed, _)) => out.say(
+        match ask_for(label, out, link, TEST_PREV, &target, diff, cfg.board_timeout) {
+            Some((found, elapsed, _)) => out.say(
                 label,
                 &format!(
                     "diff {diff}: found nonce {found} in {:.1}s -> {} {}",
@@ -463,7 +505,7 @@ fn run_board_test(label: &str, cfg: &Config, out: &Out, link: &dyn Link) {
                 ),
                 if found == nonce { "success" } else { "error" },
             ),
-            Err(e) => out.say(label, &format!("diff {diff}: {e}", ), "error"),
+            None => continue,
         }
     }
 }
@@ -836,42 +878,10 @@ fn mine_link(
         // The firmware refuses difficulty above 655 on AVR, so a share can
         // never take longer than ~65501 hashes.
         let allowance = Duration::from_secs(((diff as u64 * 100) / 500 + 60).max(60));
-        if let Err(e) = link.send(&prev, &target, diff) {
-            out.say(label, &e, "error");
-            continue;
-        }
-        let start = Instant::now();
-        let outcome = loop {
-            let spent = start.elapsed();
-            if spent >= allowance {
-                break Err(format!(
-                    "{label} exceeded the {}s allowance",
-                    allowance.as_secs()
-                ));
-            }
-            match link.reply(allowance - spent) {
-                Ok((nonce, elapsed, ducoid)) => {
-                    // Replies arrive in the order the jobs were sent. If the
-                    // board was still searching an earlier job when this one was
-                    // given, the first line that comes back belongs to that job.
-                    if sha1_hex(&format!("{prev}{nonce}", )) == target {
-                        break Ok((nonce, elapsed, ducoid));
-                    }
-                    out.say(label, &format!("discarding stale reply (nonce {nonce})", ), "warning");
-                    /* The line that came back belongs to a job the board was
-                       still working on when this one was handed over, so nothing
-                       that matches will arrive unless the job is handed over
-                       again. */
-                    if let Err(e) = link.send(&prev, &target, diff) {
-                        out.say(label, &format!("could not resend the job: {e}", ), "warning");
-                    }
-                }
-                Err(e) => break Err(e),
-            }
-        };
+        let outcome = ask_for(label, &out, link, &prev, &target, diff, allowance);
 
         match outcome {
-            Ok((nonce, elapsed, ducoid)) => {
+            Some((nonce, elapsed, ducoid)) => {
                 let seconds = elapsed as f64 / 1e6;
                 let rate = if seconds > 0.0 { nonce as f64 / seconds } else { 0.0 };
                 last_rate = rate;
@@ -951,8 +961,7 @@ fn mine_link(
                     }
                 }
             }
-            Err(e) => {
-                out.say(label, &e, "error");
+            None => {
                 totals.lock().unwrap().rates.insert(label.to_string(), 0.0);
                 // Whatever went wrong, the surest recovery is to reset the
                 // board: opening the port toggles DTR, which restarts the sketch

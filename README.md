@@ -337,10 +337,11 @@ from the master:    RIG <addr> <addr> ...       the boards on the bus
 ```
 
 Every `STAT` line is a thing to look at, because a clean bus says nothing. The
-miner repeats it as a warning:
+miner repeats it as a warning, and the report names the board that is losing
+bytes:
 
 ```
-[bus] /dev/ttyACM1: 6 boards, 410 jobs sent, 408 shares, 0 boards went silent, 3 of 37720 job bytes refused by a board, 10542 H/s across 6 mining boards
+[bus] /dev/ttyACM1: 6 boards, 410 jobs sent, 408 shares, 0 boards went silent, 3 of 37720 job bytes refused by a board, board 4 refused 3, 10542 H/s across 6 mining boards
 ```
 
 Without `MODE rig` the master runs its own self-test: it walks addresses 1 to

@@ -145,6 +145,7 @@ struct Slave {
   uint8_t attempts;
   uint8_t retries;             /* times this reply line was asked for again */
   uint32_t jobs, ok, bad;
+  uint16_t nacked;               /* job bytes this board refused to take */
   uint32_t lastHashrate;       /* that board's own figure from its last share */
   bool alive;                  /* cleared when it stops answering altogether */
 };
@@ -302,6 +303,7 @@ static void discover(void) {
     s.jobFromPool = false;
     s.attempts = 0;
     s.jobs = s.ok = s.bad = 0;
+    s.nacked = 0;
     s.lastHashrate = 0;
     s.alive = true;
     added = true;
@@ -320,7 +322,8 @@ static void discover(void) {
    sent again from the beginning. Without that, the mangled line is what the
    board works on, the board never answers, and the master spends the rest of
    the session waiting for a share that was never going to come. */
-static bool sendJob(uint8_t address, const char *job, uint8_t len) {
+static bool sendJob(Slave &s, const char *job, uint8_t len) {
+  uint8_t address = s.address;
   for (uint8_t line = 0; line < JOB_ATTEMPTS; line++) {
     bool complete = true;
     for (uint8_t i = 0; i < len && complete; i++) {
@@ -339,6 +342,7 @@ static bool sendJob(uint8_t address, const char *job, uint8_t len) {
       }
       if (!written) {
         bytesNacked++;
+        s.nacked++;
         complete = false;
       }
       sends++;
@@ -366,7 +370,7 @@ static void dispatch(Slave &s) {
      that was never going to come. */
   s.searching = true;
   s.searchStart = millis();
-  if (!sendJob(s.address, s.job, s.jobLen)) {
+  if (!sendJob(s, s.job, s.jobLen)) {
     /* The job never made it onto the bus. Say so, so the miner can hand this
        board a fresh job instead of waiting out the whole allowance. */
     s.searching = false;
@@ -625,6 +629,12 @@ void loop() {
            on the next round. */
         s.lastHashrate = elapsed ? (uint32_t)((unsigned long long)nonce * 1000000ULL / elapsed) : 0;
 
+        /* A self-test job that was already on the bus when the miner took over
+           still gets answered. That answer is not a share the miner asked for, so
+           it is not sent up as one; the board is simply freed up for the real job
+           sitting in its queue. */
+        if (poolDriven && !s.jobFromPool) continue;
+
         Serial.print("SHARE ");
         Serial.print(s.address);
         Serial.print(' ');
@@ -742,6 +752,10 @@ void loop() {
         reportedNacked = bytesNacked;
         reportedBad = repliesBad;
         uint8_t mining = 0;
+        uint8_t worst = 0;
+        for (uint8_t i = 0; i < slaveCount; i++)
+          if (slaves[i].nacked > slaves[worst].nacked) worst = i;
+
         Serial.print("STAT ");
         Serial.print(slaveCount);
         Serial.print(" boards, ");
@@ -754,7 +768,14 @@ void loop() {
         Serial.print(bytesNacked);
         Serial.print(" of ");
         Serial.print(sends);
-        Serial.print(" job bytes refused by a board, ");
+        Serial.print(" job bytes refused by a board");
+        if (bytesNacked) {
+          Serial.print(", board ");
+          Serial.print(slaves[worst].address);
+          Serial.print(" refused ");
+          Serial.print(slaves[worst].nacked);
+        }
+        Serial.print(", ");
         Serial.print(busHashrate(&mining));
         Serial.print(" H/s across ");
         Serial.print(mining);

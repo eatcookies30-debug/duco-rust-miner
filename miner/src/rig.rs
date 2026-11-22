@@ -116,6 +116,18 @@ impl Rig {
         rig.send("MODE rig\n")?;
         thread::sleep(Duration::from_millis(300));
         rig.send("MODE rig\n")?;
+
+        /* The master's self-test is already handing out jobs when the port is
+           opened, so a reply to one of those jobs can land in the queue before
+           the miner has asked for anything. Those replies are dropped rather than
+           read as shares: the master stops self-testing on the MODE line, and
+           anything still in flight is ignored on its way up. */
+        thread::sleep(Duration::from_millis(200));
+        {
+            let mut state = rig.state.lock().unwrap();
+            state.shares.clear();
+            state.misses.clear();
+        }
         Ok(rig)
     }
 

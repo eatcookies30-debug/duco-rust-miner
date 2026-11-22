@@ -834,21 +834,35 @@ fn mine_link(
     node: (String, u16, String),
     link: &dyn Link,
 ) -> f64 {
-    let test_rate = match test_rate(label, out, link, cfg.board_timeout) {
-        Some(rate) => rate,
-        None => return 0.0,
+    let test_rate = test_rate(label, out, link, cfg.board_timeout);
+    /* The test job exists only to pick a difficulty class. A board that does not
+       answer it is not necessarily dead - one garbled job line on a busy bus can
+       use up all three tries - so it starts at the lowest class and the pool
+       itself raises the difficulty to what the board can handle. Dropping the
+       board here would leave a working rig board idle for the whole session. */
+    let measured = match test_rate {
+        Some(rate) => tier_for(rate),
+        None => {
+            out.say(
+                label,
+                "the test job did not come back, starting at the lowest difficulty and letting the pool raise it",
+                "warning",
+            );
+            "AVR"
+        }
     };
-    let measured = tier_for(test_rate);
     let mut tier = cfg.tier.clone().unwrap_or_else(|| measured.to_string());
-    out.say(
-        label,
-        &format!(
-            "test {:.2} H/s -> difficulty class {tier}{}",
-            test_rate,
-            if cfg.tier.is_some() { " (requested)" } else { "" }
-        ),
-        "info",
-    );
+    if let Some(rate) = test_rate {
+        out.say(
+            label,
+            &format!(
+                "test {:.2} H/s -> difficulty class {tier}{}",
+                rate,
+                if cfg.tier.is_some() { " (requested)" } else { "" }
+            ),
+            "info",
+        );
+    }
 
     let mut node = node;
     let mut p = match Pool::connect(&node.0, node.1, cfg.pool_timeout) {

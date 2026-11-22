@@ -19,8 +19,10 @@
   USER SETTINGS - the only lines you need to change
 
   MAX_SLAVES       how many boards this master will drive. Each one costs a
-                   48 byte reply buffer plus a little bookkeeping: comfortable
-                   on a Mega, tight on a 328P board acting as the master.
+                   48 byte reply buffer plus a little bookkeeping: a Mega has
+                   room for a dozen or more, a 328P board (Uno, Nano, Pro Mini)
+                   acting as the master fits three and no more - six boards need
+                   2,407 bytes of the 2,048 bytes of RAM those chips have.
   RIG_BUS_KHZ      the bus speed in kHz. 100 is fine for short leads; use 50 if
                    the wires are long, many boards are hanging off them, or
                    replies start getting dropped.
@@ -31,6 +33,11 @@
                    there, which is bus traffic that mines nothing.
   RESCAN_SECONDS    how often the master walks the bus again, so a board plugged
                    in later joins without restarting anything.
+  STAT_SECONDS      how often the master reports the health of the bus while the
+                    miner is driving it: jobs sent, replies accepted, replies
+                    refused, and job bytes the boards refused to take. Nothing is
+                    printed while the bus is clean, so a line from this is always
+                    something to look at.
   MAX_SEARCH_MS    how long a board is allowed to search one job. A job line
                    that arrives with a byte missing is refused by the board, and
                    without this the master would go on believing that board is
@@ -51,6 +58,14 @@
 #define RESCAN_SECONDS     60
 #define SILENCE_TIMEOUT_MS 20000
 #define MAX_SEARCH_MS      90000
+#define STAT_SECONDS       30
+
+/* A 328P acting as the master runs out of RAM with more than three boards. The
+   error message is clearer than "data section exceeds available space". */
+#if (defined(__AVR_ATmega328P__) || defined(__AVR_ATmega328__) || \
+     defined(__AVR_ATmega168P__) || defined(__AVR_ATmega168__)) && MAX_SLAVES > 3
+#error "A Uno/Nano/Pro Mini rig master fits three boards. Set MAX_SLAVES to 3 or use a Mega as the master."
+#endif
 
 /* ---------------------------------------------------------------- */
 
@@ -97,6 +112,7 @@
                          SHARE <addr> <nonce>,<elapsed>,<DUCOID>
                          BUSY <addr>                that board is still searching
                          MISS <addr> <reason>       that board never answered
+                         STAT ...                   bus health, only when it changed
 
      Shares are plain decimal numbers over the bus, not the base-2 the serial
      protocol of an AVR board uses.
@@ -144,6 +160,21 @@ static uint32_t repliesOk = 0;
 static uint32_t repliesBad = 0;
 static uint32_t bytesNacked = 0;
 static uint32_t sends = 0;
+
+/* The hashrate the boards themselves reported on their last share, and how many
+   of them are still in play. */
+static uint32_t busHashrate(uint8_t *mining) {
+  uint32_t total = 0;
+  uint8_t count = 0;
+  for (uint8_t i = 0; i < slaveCount; i++) {
+    if (slaves[i].alive && slaves[i].lastHashrate) {
+      total += slaves[i].lastHashrate;
+      count++;
+    }
+  }
+  if (mining) *mining = count;
+  return total;
+}
 
 /* The self-test job is SHA-1("ba29a15896fd2d792d5c4b60668bf2b9feebc51d" +
    "9999"), so a correct board answers with 9999. */
@@ -535,6 +566,9 @@ void loop() {
 
   unsigned long lastRescan = millis();
   unsigned long lastReport = millis();
+  unsigned long lastStat = millis();
+  uint32_t reportedNacked = 0;
+  uint32_t reportedBad = 0;
   uint8_t ledTick = 0;
 
   while (true) {
@@ -677,14 +711,8 @@ void loop() {
 
     if (!poolDriven && millis() - lastReport >= 5000UL) {
       lastReport = millis();
-      uint32_t busHash = 0;
       uint8_t mining = 0;
-      for (uint8_t i = 0; i < slaveCount; i++) {
-        if (slaves[i].alive && slaves[i].lastHashrate) {
-          busHash += slaves[i].lastHashrate;
-          mining++;
-        }
-      }
+      uint32_t busHash = busHashrate(&mining);
 
       Serial.print("Totals: ");
       Serial.print(slaveCount);
@@ -703,6 +731,35 @@ void loop() {
       Serial.print(" H/s across the ");
       Serial.print(mining);
       Serial.println(" mining slaves");
+    }
+
+    /* The same health check while the miner is driving the rig. Nothing is
+       printed while the bus is clean, so a STAT line always means something
+       went wrong somewhere, and the miner shows it as a warning. */
+    if (poolDriven && millis() - lastStat >= (unsigned long)STAT_SECONDS * 1000UL) {
+      lastStat = millis();
+      if (bytesNacked != reportedNacked || repliesBad != reportedBad) {
+        reportedNacked = bytesNacked;
+        reportedBad = repliesBad;
+        uint8_t mining = 0;
+        Serial.print("STAT ");
+        Serial.print(slaveCount);
+        Serial.print(" boards, ");
+        Serial.print(jobsSent);
+        Serial.print(" jobs sent, ");
+        Serial.print(repliesOk);
+        Serial.print(" shares, ");
+        Serial.print(repliesBad);
+        Serial.print(" boards went silent, ");
+        Serial.print(bytesNacked);
+        Serial.print(" of ");
+        Serial.print(sends);
+        Serial.print(" job bytes refused by a board, ");
+        Serial.print(busHashrate(&mining));
+        Serial.print(" H/s across ");
+        Serial.print(mining);
+        Serial.println(" mining boards");
+      }
     }
 
     /* The pause between rounds drains the serial rather than just sleeping. A

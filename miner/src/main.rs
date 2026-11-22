@@ -688,6 +688,9 @@ fn mine(cfg: &Config, out: &Out) {
 
     let start = Instant::now();
     let report = cfg.report_time.max(1);
+    /* The last bus health report seen from each rig master, so the same report
+       is not repeated on every status line. */
+    let mut last_bus_stat: HashMap<String, String> = HashMap::new();
     while active.load(Ordering::Relaxed) > 0 {
         thread::sleep(Duration::from_secs(report));
 
@@ -705,6 +708,24 @@ fn mine(cfg: &Config, out: &Out) {
                     cfg, &totals, out, node.clone(), link_port,
                 );
                 board_index += 1;
+            }
+        }
+
+        /* Each rig master reports the health of its bus when something goes
+           wrong on it: a byte of a job line refused by a board, or a board that
+           stopped answering. A clean rig never says anything, so this line is
+           always worth reading. */
+        for (link_rig, _, link_port) in &rig_links {
+            let stat = link_rig.stat();
+            if stat.is_empty() {
+                continue;
+            }
+            match last_bus_stat.get(link_port) {
+                Some(previous) if *previous == stat => {}
+                _ => {
+                    out.say("bus", &format!("{link_port}: {stat}", ), "warning");
+                    last_bus_stat.insert(link_port.clone(), stat);
+                }
             }
         }
 

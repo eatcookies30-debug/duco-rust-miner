@@ -16,6 +16,7 @@
 //!     SHARE <addr> <nonce>,<elapsed>,<DUCOID>
 //!     BUSY <addr>                      that board is still searching
 //!     MISS <addr> <reason>             that board never answered
+//!     STAT <report>                    bus health, only when something changed
 //!
 //! Unlike the serial protocol of a board, the numbers on the bus are plain
 //! decimal.
@@ -33,6 +34,8 @@ struct State {
     slaves: Vec<u8>,
     shares: HashMap<u8, (u64, u64, String)>,
     misses: HashMap<u8, String>,
+    // The master's own bus health report, empty until it has something to say.
+    stat: String,
 }
 
 pub struct Rig {
@@ -122,6 +125,13 @@ impl Rig {
         self.state.lock().unwrap().slaves.clone()
     }
 
+    /// The master's last bus health report, as it printed it. Empty while the
+    /// bus is clean: the master only reports when bytes were lost or a board
+    /// stopped answering.
+    pub fn stat(&self) -> String {
+        self.state.lock().unwrap().stat.clone()
+    }
+
     /// Wait for the master to report at least one board.
     pub fn wait_for_slaves(&self, timeout: Duration) -> Vec<u8> {
         let start = Instant::now();
@@ -192,8 +202,9 @@ impl Rig {
     }
 }
 
-/* One line from the rig master. Anything that is not a share, a board list or
-   a miss is the self-test chatter of the master and is ignored. */
+/* One line from the rig master. Shares, board lists, misses and bus health
+   reports are kept; anything else is the self-test chatter of the master and is
+   ignored. */
 fn note(state: &Arc<Mutex<State>>, line: &str) {
     let line = line.trim();
     if line.is_empty() {
@@ -233,6 +244,13 @@ fn note(state: &Arc<Mutex<State>>, line: &str) {
             };
             let ducoid = fields.get(2).unwrap_or(&"").to_string();
             state.lock().unwrap().shares.insert(address, (nonce, elapsed, ducoid));
+        }
+        "STAT" => {
+            /* The master's own bus health report: how many bytes of job text a
+               board refused, how many boards went silent. Kept so the status
+               line can show it. */
+            let report = parts.collect::<Vec<_>>().join(" ");
+            state.lock().unwrap().stat = report;
         }
         "MISS" => {
             let address = match parts.next().and_then(|a| a.parse::<u8>().ok()) {
@@ -285,5 +303,18 @@ mod tests {
         note(&state, "Totals: 6 slaves, 58 jobs, 49 correct");
         let s = state.lock().unwrap();
         assert!(s.shares.is_empty() && s.slaves.is_empty() && s.misses.is_empty());
+    }
+
+    #[test]
+    fn a_bus_health_report_is_kept() {
+        let state = Arc::new(Mutex::new(State::default()));
+        note(
+            &state,
+            "STAT 6 boards, 120 jobs sent, 118 shares, 0 boards went silent, \
+             3 of 11040 job bytes refused by a board, 10542 H/s across 6 mining boards",
+        );
+        let s = state.lock().unwrap();
+        assert!(s.stat.starts_with("6 boards, 120 jobs sent"));
+        assert!(s.shares.is_empty() && s.misses.is_empty());
     }
 }

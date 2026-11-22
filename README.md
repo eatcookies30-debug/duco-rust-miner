@@ -138,8 +138,15 @@ That is the whole procedure.
 The rig master has the same idea in its own USER SETTINGS block: `MAX_SLAVES`,
 `RIG_BUS_KHZ`, `FIRST_ADDRESS` / `LAST_ADDRESS` (which board numbers to look
 for), `RESCAN_SECONDS` (how often it walks the bus again, so a board plugged
-in later joins without restarting anything) and `MAX_SEARCH_MS` (how long a board
-may search one job before the master gives up on that job and sends it another).
+in later joins without restarting anything), `STAT_SECONDS` (how often it reports
+the health of the bus while the miner is driving it) and `MAX_SEARCH_MS` (how long
+a board may search one job before the master gives up on that job and sends it
+another).
+
+The master keeps a job line and a reply line for every board it drives, so a
+328P board acting as the master tops out at three boards: six boards need 2,407
+bytes of RAM and an Uno or Nano has 2,048. Anything bigger is a Mega, which has
+8,192 bytes and drives the six boards on this rig with 29% of its RAM used.
 
 If `SLAVE_ADDRESS` is set to a number another board already holds, the sketch
 retries a few times and then falls back to walking 1 to 126 and taking the first
@@ -315,7 +322,7 @@ working.
 ## The rig master's serial protocol
 
 The Rust miner talks USB serial only. A rig master is what turns that into a
-bus. With `miner/duco-miner --rig /dev/ttyACM1` the master takes its jobs from
+bus. With `duco-miner --rig /dev/ttyACM1` the master takes its jobs from
 the miner and answers with shares:
 
 ```
@@ -326,6 +333,14 @@ from the master:    RIG <addr> <addr> ...       the boards on the bus
                     SHARE <addr> <nonce>,<elapsed>,<DUCOID>
                     BUSY <addr>                 that board is still searching
                     MISS <addr> <reason>        that board never answered
+                    STAT <report>               bus health, only when it changed
+```
+
+Every `STAT` line is a thing to look at, because a clean bus says nothing. The
+miner repeats it as a warning:
+
+```
+[bus] /dev/ttyACM1: 6 boards, 410 jobs sent, 408 shares, 0 boards went silent, 3 of 37720 job bytes refused by a board, 10542 H/s across 6 mining boards
 ```
 
 Without `MODE rig` the master runs its own self-test: it walks addresses 1 to
@@ -336,8 +351,12 @@ back. That is the quickest way to find out whether a board on the bus is alive:
 ```
 Slave at address 1
 slave 1: nonce 9999 OK, 1757 H/s  (18/18 so far)
-Totals: 6 slaves, 366 jobs, 360 correct, 0 wrong, 0 of 31476 job bytes unacked, 10542 H/s across the 6 mining slaves
+Totals: 6 slaves, 160 jobs, 154 correct, 0 wrong, 0 of 13760 job bytes unacked, 10542 H/s across the 6 mining slaves
 ```
+
+That run on this rig took 150 seconds: 160 jobs out, every board answering with
+the nonce the master expected, no board dropping, and not one job byte refused
+by a board.
 
 Over the bus the reply is **decimal**; on the serial port it is **binary**. That
 is what the reference rig implementations do, and it is why an ESP rig master
@@ -392,6 +411,12 @@ way that makes a board look dead rather than slow:
   the whole allowance. On the board's side, a job line that arrives whole but
   malformed is answered with a zero nonce rather than silence - the miner checks
   the hash, sees it is not the nonce it asked for, and sends the job again.
+
+All of it is counted. Every `STAT_SECONDS` seconds (30 by default) the master
+reports what the counting shows, and the miner prints it as a `[bus]` warning -
+jobs sent, shares received, boards that went silent, and how many job bytes a
+board refused to take. A clean bus prints nothing at all, so when a line appears,
+lower `RIG_BUS_KHZ` to 50 and check the wiring.
 
 That last part matters more than it looks. On a six board rig the first version of
 this firmware lost about half the boards within a minute: one dropped byte made a

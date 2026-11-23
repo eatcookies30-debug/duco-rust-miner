@@ -344,6 +344,13 @@ bytes:
 [bus] /dev/ttyACM1: 6 boards, 410 jobs sent, 408 shares, 0 jobs never answered, 0 searches cut short, 3 of 37720 job bytes refused by a board, board 4 refused 3, 10542 H/s across 6 mining boards
 ```
 
+`MODE rig` switches the self-test off, but the jobs the master had already put on
+the bus before the handover are still being searched. The master keeps an answer
+to one of those jobs off the miner's line by remembering which job a board is
+actually working on, not just the last job it was handed. A board that answers
+with a nonce that does not hash to the job it was given is a board the miner can
+ignore safely: it checks the hash itself and sends the job again.
+
 Without `MODE rig` the master runs its own self-test: it walks addresses 1 to
 126, hands each board a job whose answer it already knows (SHA-1 of
 `ba29a15896fd2d792d5c4b60668bf2b9feebc51d` + `9999`), and prints what came
@@ -415,8 +422,9 @@ way that makes a board look dead rather than slow:
 
 All of it is counted. Every `STAT_SECONDS` seconds (30 by default) the master
 reports what the counting shows, and the miner prints it as a `[bus]` warning -
-jobs sent, shares received, boards that went silent, and how many job bytes a
-board refused to take. A clean bus prints nothing at all, so when a line appears,
+jobs sent, shares received, jobs that never got an answer, searches cut short by
+`MAX_SEARCH_MS`, and how many job bytes a board refused to take, naming the board
+that refused them. A clean bus prints nothing at all, so when a line appears,
 lower `RIG_BUS_KHZ` to 50 and check the wiring.
 
 That last part matters more than it looks. On a six board rig the first version of

@@ -22,7 +22,7 @@
                    48 byte reply buffer plus a little bookkeeping: a Mega has
                    room for a dozen or more, a 328P board (Uno, Nano, Pro Mini)
                    acting as the master fits three and no more - six boards need
-                   2,407 bytes of the 2,048 bytes of RAM those chips have.
+                   2,469 bytes of the 2,048 bytes of RAM those chips have.
   RIG_BUS_KHZ      the bus speed in kHz. 100 is fine for short leads; use 50 if
                    the wires are long, many boards are hanging off them, or
                    replies start getting dropped.
@@ -140,7 +140,8 @@ struct Slave {
   uint8_t replyLen;
   char job[88];                /* the job text, newline included */
   uint8_t jobLen;
-  bool jobFromPool;            /* the job came from the miner, not the self-test */
+  bool jobFromPool;            /* the job waiting in `job` came from the miner */
+  bool runningFromPool;        /* the job the board is actually searching now */
   unsigned long lastReplyAt;   /* the last byte any poll returned */
   uint8_t attempts;
   uint8_t retries;             /* times this reply line was asked for again */
@@ -371,6 +372,7 @@ static void dispatch(Slave &s) {
      that was never going to come. */
   s.searching = true;
   s.searchStart = millis();
+  s.runningFromPool = s.jobFromPool;
   if (!sendJob(s, s.job, s.jobLen)) {
     /* The job never made it onto the bus. Say so, so the miner can hand this
        board a fresh job instead of waiting out the whole allowance, and count
@@ -386,6 +388,7 @@ static void dispatch(Slave &s) {
   }
   /* The job text is spent once it has gone out on the bus. */
   s.jobLen = 0;
+  s.jobFromPool = false;
   s.replyLen = 0;
   s.attempts = 1;
   s.lastReplyAt = millis();
@@ -623,8 +626,12 @@ void loop() {
         uint32_t nonce = parseNonce(s.reply);
         uint32_t elapsed = parseElapsed(s.reply);
         /* A job from the pool is checked by the miner itself; the self-test job
-           has a known answer, so the master can judge it directly. */
-        bool selfTest = !s.jobFromPool;
+           has a known answer, so the master can judge it directly. runningFromPool
+           is the job the board is searching right now, which is not the same as the
+           job sitting in the queue: a board that was still working on its self-test
+           job when the miner took over has that self-test job in flight, and its
+           answer is not a share the miner asked for. */
+        bool selfTest = !s.runningFromPool;
         bool ok = !selfTest || (nonce == SELF_NONCE);
         s.searching = false;
         s.lastHashrate = elapsed ? (uint32_t)((unsigned long long)nonce * 1000000ULL / elapsed) : 0;

@@ -34,7 +34,7 @@ except Exception:
     pass
 
 if not raw or raw == "None":
-    key = ""
+    print("mining key:  nothing to check - %s has no mining_key" % config_path)
 else:
     padded = raw + "=" * (-len(raw) % 4)
     try:
@@ -43,22 +43,20 @@ else:
     except Exception:
         key = raw
 
-params = {"u": user}
-if key:
-    params["k"] = key
-try:
-    req = urllib.request.Request(
-        "https://server.duinocoin.com/mining_key?" + urllib.parse.urlencode(params),
-        headers={"User-Agent": "Duino-Coin AVR Miner (Rust) 1.0"})
-    r = json.load(urllib.request.urlopen(req, timeout=15))
-except Exception as e:
-    print("mining key:  could not be checked (%s)" % e)
-else:
-    if not r.get("has_key"):
-        print("mining key:  none set on this account")
-    elif r.get("success"):
-        print("mining key:  valid - the key in Settings.cfg is accepted")
+    params = {"u": user, "k": key}
+    try:
+        req = urllib.request.Request(
+            "https://server.duinocoin.com/mining_key?" + urllib.parse.urlencode(params),
+            headers={"User-Agent": "Duino-Coin AVR Miner (Rust) 1.0"})
+        r = json.load(urllib.request.urlopen(req, timeout=15))
+    except Exception as e:
+        print("mining key:  could not be checked (%s)" % e)
     else:
-        print("mining key:  set on the account but the one in Settings.cfg is not it"
-              " - run ./set-mining-key.sh")
+        if not r.get("has_key"):
+            print("mining key:  none set on this account, so any key is accepted")
+        elif r.get("success"):
+            print("mining key:  valid - the key in Settings.cfg is accepted")
+        else:
+            print("mining key:  set on the account but the one in Settings.cfg is not it"
+                  " - run ./set-mining-key.sh")
 ' "$USER" "$CONFIG"

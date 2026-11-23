@@ -22,6 +22,11 @@ while [ $# -gt 0 ]; do
     if [ "$1" = "--board" ]; then
         BOARD="$2"
         shift 2
+    elif [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
+        echo "usage: flash.sh [--board FQBN] <sketch-dir> [port ...]"
+        echo "  ./scripts/flash.sh firmware/board_sketch /dev/ttyACM0"
+        echo "  ./scripts/flash.sh --board arduino:avr:nano firmware/board_sketch /dev/ttyUSB0"
+        exit 0
     else
         ARGS+=("$1")
         shift

@@ -138,11 +138,14 @@ fn usage() {
     println!(
         "usage: duco-miner [--config Settings.cfg] [--user NAME] [--key KEY] \\\n\
         \x20     [--ports /dev/ttyACM0] [--rig /dev/ttyACM1] [--pool ip:port] \\\n\
-        \x20     [--report-time SECS] [--board-timeout SECS] [--rounds N] [--no-color] [--version]\n\
+        \x20     [--tier AVR|MEGA|ARM|DUE] [--report-time SECS] [--board-timeout SECS] \\\n\
+        \x20     [--rounds N] [--no-color] [--version]\n\
         \n\
         helpers:\n\
         \x20 duco-miner --bench     test the boards offline, no account needed\n\
-        \x20 duco-miner --ping      print the pool node the picker gives and its latency\n"
+        \x20 duco-miner --ping      print the pool node the picker gives and its latency\n\
+        \n\
+        \x20 DUCO_DEBUG=1 dumps the raw bytes the boards send to stderr\n"
     );
 }
 

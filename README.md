@@ -35,7 +35,7 @@ reports.
 |---|---|---|---|---|
 | `firmware/board_sketch` | Mega 2560 | 37,208 B (14%) | 1,513 B | 1,782 |
 | `firmware/board_sketch` | Nano 328P clone | 26,644 B (86%) | 1,513 B (73%) | 1,757 |
-| `firmware/i2c_rig` (master) | Mega 2560 | 13,902 B (5%) | 2,504 B | - |
+| `firmware/i2c_rig` (master) | Mega 2560 | 14,000 B (5%) | 2,534 B | - |
 | `firmware/baremetal` | Nano 328P clone | 4,552 B (14%) | 713 B | 763 |
 | `firmware/baremetal` | ATmega8 | 4,298 B (52%) | 729 B | not run |
 | `firmware/baremetal` | ATtiny45 | 3,968 B (97%) | 114 B | not run |
@@ -144,7 +144,7 @@ a board may search one job before the master gives up on that job and sends it
 another).
 
 The master keeps a job line and a reply line for every board it drives, so a
-328P board acting as the master tops out at three boards: six boards need 2,504
+328P board acting as the master tops out at three boards: six boards need 2,534
 bytes of RAM and an Uno or Nano has 2,048. Anything bigger is a Mega, which has
 8,192 bytes and drives the six boards on this rig with 30% of its RAM used.
 
@@ -341,7 +341,7 @@ miner repeats it as a warning, and the report names the board that is losing
 bytes:
 
 ```
-[bus] /dev/ttyACM1: 6 boards, 410 jobs sent, 408 shares, 0 jobs never answered, 0 searches cut short, 3 of 37720 job bytes refused by a board, board 4 refused 3, 10542 H/s across 6 mining boards
+[bus] /dev/ttyACM1: 6 boards, 410 jobs sent, 408 shares, 0 jobs with no usable answer, 0 searches stopped early, 3 of 37720 job bytes refused by a board, board 4 refused 3, 10542 H/s across 6 mining boards
 ```
 
 `MODE rig` switches the self-test off, but the jobs the master had already put on

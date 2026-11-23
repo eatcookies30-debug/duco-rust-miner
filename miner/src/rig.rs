@@ -322,9 +322,9 @@ mod tests {
         let state = Arc::new(Mutex::new(State::default()));
         note(
             &state,
-            "STAT 6 boards, 120 jobs sent, 118 shares, 0 jobs never answered, \
-             2 searches cut short, 3 of 11040 job bytes refused by a board, \
-             board 4 refused 3, 10542 H/s across 6 mining boards",
+            "STAT 6 boards, 120 jobs sent, 118 shares, 1 job with no usable answer, \
+             2 searches stopped early (last on board 4), 3 of 11040 job bytes refused \
+             by a board, board 4 refused 3, 10542 H/s across 6 mining boards",
         );
         let s = state.lock().unwrap();
         assert!(s.stat.starts_with("6 boards, 120 jobs sent"));

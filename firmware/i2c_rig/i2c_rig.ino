@@ -22,7 +22,7 @@
                    48 byte reply buffer plus a little bookkeeping: a Mega has
                    room for a dozen or more, a 328P board (Uno, Nano, Pro Mini)
                    acting as the master fits three and no more - six boards need
-                   2,504 bytes of the 2,048 bytes of RAM those chips have.
+                   2,534 bytes of the 2,048 bytes of RAM those chips have.
   RIG_BUS_KHZ      the bus speed in kHz. 100 is fine for short leads; use 50 if
                    the wires are long, many boards are hanging off them, or
                    replies start getting dropped.
@@ -144,7 +144,6 @@ struct Slave {
   bool runningFromPool;        /* the job the board is actually searching now */
   unsigned long lastReplyAt;   /* the last byte any poll returned */
   uint8_t attempts;
-  uint8_t retries;             /* times this reply line was asked for again */
   uint32_t jobs, ok, bad;
   uint16_t nacked;               /* job bytes this board refused to take */
   uint32_t lastHashrate;       /* that board's own figure from its last share */
@@ -397,11 +396,13 @@ static void dispatch(Slave &s) {
   jobsSent++;
 }
 
-/* A share line is "nonce,elapsed,DUCOID...". On a busy bus a byte or two goes
-   missing occasionally, usually at the start of the line, and the number that
-   comes out is then nonsense. The board still has the whole line in its reply
-   buffer: sending it a '?' puts the read pointer back at the beginning, so the
-   same line is handed over again. */
+/* A share line is "nonce,elapsed,DUCOID...". A reply that does not have that
+   shape is the answer to a job the master stopped listening for, or a line with
+   a byte missing on the way out. There is no safe way to ask a board to hand
+   the same reply over twice: the only thing a board can be given is job bytes,
+   and a stray character in its job buffer makes the next job unreadable for a
+   board built before the reply pointer had a reset command. So the line is
+   dropped and the board gets the next job the miner sends it. */
 static bool replyLooksWhole(const char *line) {
   uint8_t i = 0;
   while (line[i] >= '0' && line[i] <= '9') i++;
@@ -416,11 +417,13 @@ static bool replyLooksWhole(const char *line) {
   return line[i + 1] == 'D';
 }
 
-static void askAgain(uint8_t address) {
-  waitForIdleBus();
-  Wire.beginTransmission(address);
-  Wire.write('?');
-  Wire.endTransmission();
+/* "1 job with no usable answer", "3 jobs with no usable answer". The report is
+   read by people, so the counts are pluralised instead of always saying "1 jobs". */
+static void printCount(uint32_t n, const char *singular) {
+  Serial.print(n);
+  Serial.print(' ');
+  Serial.print(singular);
+  if (n != 1) Serial.print('s');
 }
 
 static uint32_t parseNonce(const char *line) {
@@ -617,13 +620,18 @@ void loop() {
          its own main loop while the master works through the list, so all of
          them mine at once. */
       if (pollSlave(s)) {
-        if (!replyLooksWhole(s.reply) && s.retries == 0) {
-          s.retries = 1;
+        if (!replyLooksWhole(s.reply)) {
+          repliesBad++;
+          s.bad++;
+          s.searching = false;
           s.replyLen = 0;
-          askAgain(s.address);
+          if (!poolDriven) {
+            Serial.print("slave ");
+            Serial.print(s.address);
+            Serial.println(": answer was not a share line, giving it a new job");
+          }
           continue;
         }
-        s.retries = 0;
         uint32_t nonce = parseNonce(s.reply);
         uint32_t elapsed = parseElapsed(s.reply);
         /* A job from the pool is checked by the miner itself; the self-test job
@@ -790,16 +798,15 @@ void loop() {
           if (slaves[i].nacked > slaves[worst].nacked) worst = i;
 
         Serial.print("STAT ");
-        Serial.print(slaveCount);
-        Serial.print(" boards, ");
-        Serial.print(jobsSent);
-        Serial.print(" jobs sent, ");
-        Serial.print(repliesOk);
-        Serial.print(" shares, ");
-        Serial.print(repliesBad);
-        Serial.print(" jobs never answered, ");
-        Serial.print(searchTimeouts);
-        Serial.print(" searches cut short");
+        printCount(slaveCount, "board");
+        Serial.print(", ");
+        printCount(jobsSent, "job");
+        Serial.print(" sent, ");
+        printCount(repliesOk, "share");
+        Serial.print(", ");
+        printCount(repliesBad, "job with no usable answer");
+        Serial.print(", ");
+        printCount(searchTimeouts, "search stopped early");
         if (lastTimeoutAddr) {
           Serial.print(" (last on board ");
           Serial.print(lastTimeoutAddr);

@@ -19,10 +19,11 @@
   USER SETTINGS - the only lines you need to change
 
   MAX_SLAVES       how many boards this master will drive. Each one costs a
-                   48 byte reply buffer plus a little bookkeeping: a Mega has
-                   room for a dozen or more, a 328P board (Uno, Nano, Pro Mini)
-                   acting as the master fits three and no more - six boards need
-                   2,534 bytes of the 2,048 bytes of RAM those chips have.
+                   48 byte reply buffer, an 88 byte job buffer and a little
+                   bookkeeping: a Mega has room for a dozen or more, a 328P
+                   board (Uno, Nano, Pro Mini) acting as the master fits two and
+                   no more - its own bookkeeping is about 1,600 bytes and each
+                   board adds 160 of the 2,048 bytes those chips have.
   RIG_BUS_KHZ      the bus speed in kHz. 100 is fine for short leads; use 50 if
                    the wires are long, many boards are hanging off them, or
                    replies start getting dropped.
@@ -60,11 +61,12 @@
 #define MAX_SEARCH_MS      90000
 #define STAT_SECONDS       30
 
-/* A 328P acting as the master runs out of RAM with more than three boards. The
-   error message is clearer than "data section exceeds available space". */
+/* A 328P acting as the master runs out of RAM with more than two boards: its own
+   bookkeeping takes about 1,600 bytes and every board costs 160 more, so three
+   boards need 2,086 of the 2,048 bytes an Uno or Nano has. */
 #if (defined(__AVR_ATmega328P__) || defined(__AVR_ATmega328__) || \
-     defined(__AVR_ATmega168P__) || defined(__AVR_ATmega168__)) && MAX_SLAVES > 3
-#error "A Uno/Nano/Pro Mini rig master fits three boards. Set MAX_SLAVES to 3 or use a Mega as the master."
+     defined(__AVR_ATmega168P__) || defined(__AVR_ATmega168__)) && MAX_SLAVES > 2
+#error "A Uno/Nano/Pro Mini rig master only has room for two boards. Set MAX_SLAVES to 2 or use a Mega as the master."
 #endif
 
 /* ---------------------------------------------------------------- */
@@ -418,12 +420,11 @@ static bool replyLooksWhole(const char *line) {
 }
 
 /* "1 job with no usable answer", "3 jobs with no usable answer". The report is
-   read by people, so the counts are pluralised instead of always saying "1 jobs". */
-static void printCount(uint32_t n, const char *singular) {
+   read by people, so counts are pluralised instead of always saying "1 jobs". */
+static void printCount(uint32_t n, const char *singular, const char *plural) {
   Serial.print(n);
   Serial.print(' ');
-  Serial.print(singular);
-  if (n != 1) Serial.print('s');
+  Serial.print(n == 1 ? singular : plural);
 }
 
 static uint32_t parseNonce(const char *line) {
@@ -798,15 +799,17 @@ void loop() {
           if (slaves[i].nacked > slaves[worst].nacked) worst = i;
 
         Serial.print("STAT ");
-        printCount(slaveCount, "board");
+        printCount(slaveCount, "board", "boards");
         Serial.print(", ");
-        printCount(jobsSent, "job");
+        printCount(jobsSent, "job", "jobs");
         Serial.print(" sent, ");
-        printCount(repliesOk, "share");
+        printCount(repliesOk, "share", "shares");
         Serial.print(", ");
-        printCount(repliesBad, "job with no usable answer");
+        printCount(repliesBad, "job with no usable answer",
+                   "jobs with no usable answer");
         Serial.print(", ");
-        printCount(searchTimeouts, "search stopped early");
+        printCount(searchTimeouts, "search stopped early",
+                   "searches stopped early");
         if (lastTimeoutAddr) {
           Serial.print(" (last on board ");
           Serial.print(lastTimeoutAddr);

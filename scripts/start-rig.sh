@@ -30,6 +30,14 @@ if [ $# -gt 0 ] && [ -f "$1" ]; then
     settings="$1"
     shift
     exec "$MINER" --config "$settings" "$@"
+elif [ $# -gt 0 ] && [ "${1#-}" = "$1" ]; then
+    # The caller named a settings file that is not there. A desktop shortcut
+    # whose Exec line has an unquoted path with spaces lands here, because the
+    # path is chopped at the first space.
+    echo "no settings file at: $1"
+    echo "Quote the path in the shortcut, or keep it free of spaces:"
+    echo "  Exec=/path/to/start-rig.sh \"/home/me/Settings.cfg\""
+    exit 1
 fi
 
 # Use the settings file the caller named; otherwise the one next to the miner,

@@ -211,6 +211,20 @@ To put the shortcut on your desktop, copy `scripts/rig-shortcut.desktop` to
 `~/.local/share/applications/`, change the `Exec=` line to your path, and
 launch it from the desktop's application launcher.
 
+Two things that make a shortcut behave oddly:
+
+- **The rig master is not a board.** A `Settings.cfg` copied from the official
+  miner lists every USB port under `avrport`, and the official miner has no
+  idea what `rigport` is. If the master's port ends up in `avrport` and
+  `rigport` is empty, the miner reports something like `3 board(s) on serial,
+  0 rig master(s)`: the Mega driving the bus is treated as a plain board and
+  the boards hanging off it get no jobs. Move the master from `avrport` to
+  `rigport`. The miner stops with a clear message if the same port is listed
+  in both.
+- **Quote the settings path in `Exec=`.** A desktop launcher splits the line at
+  spaces, so `Exec=.../start-rig.sh /home/me/My Miner/Settings.cfg` reaches the
+  script as three arguments. Either quote the path or keep it free of spaces.
+
 ## Command line
 
 | flag | meaning |

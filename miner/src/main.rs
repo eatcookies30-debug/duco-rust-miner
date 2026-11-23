@@ -109,6 +109,20 @@ fn main() {
         std::process::exit(1);
     }
 
+    /* A rig master is not a board: it is the Mega that drives the boards on the
+       I2C bus. Configs copied from the official miner often list every USB port
+       under avrport, which would open the master's cable twice and let two
+       threads fight over it. Say so plainly instead of half-mining. */
+    for port in &cfg.ports {
+        if cfg.rigs.contains(port) {
+            eprintln!(
+                "{port} is listed as both a board and a rig master. Move it from \
+                 avrport to rigport, or drop it from one of them."
+            );
+            std::process::exit(1);
+        }
+    }
+
     let lock = format!(
         "/tmp/duco-miner-{}.lock",
         cfg.ports

@@ -624,21 +624,30 @@ void loop() {
         uint32_t elapsed = parseElapsed(s.reply);
         /* A job from the pool is checked by the miner itself; the self-test job
            has a known answer, so the master can judge it directly. */
-        bool ok = s.jobFromPool || (nonce == SELF_NONCE);
+        bool selfTest = !s.jobFromPool;
+        bool ok = !selfTest || (nonce == SELF_NONCE);
+        s.searching = false;
+        s.lastHashrate = elapsed ? (uint32_t)((unsigned long long)nonce * 1000000ULL / elapsed) : 0;
+
+        /* An answer to a self-test job that was already on the bus when the miner
+           took over is not a job the miner asked for, so it does not belong in the
+           totals the STAT report is built from. The per-board counters keep it, so
+           the self-test report stays honest. */
+        if (selfTest && poolDriven) {
+          s.ok += ok;
+          s.bad += !ok;
+          /* jobLen is left alone on purpose: if the miner handed over another job
+             while this board was searching, that job is still queued and goes out
+             on the next round. */
+          continue;
+        }
+
         if (ok) repliesOk++; else repliesBad++;
         s.ok += ok;
         s.bad += !ok;
-        s.searching = false;
         /* jobLen is left alone on purpose: if the miner handed over another job
            while this board was searching, that job is still queued and goes out
            on the next round. */
-        s.lastHashrate = elapsed ? (uint32_t)((unsigned long long)nonce * 1000000ULL / elapsed) : 0;
-
-        /* A self-test job that was already on the bus when the miner took over
-           still gets answered. That answer is not a share the miner asked for, so
-           it is not sent up as one; the board is simply freed up for the real job
-           sitting in its queue. */
-        if (poolDriven && !s.jobFromPool) continue;
 
         Serial.print("SHARE ");
         Serial.print(s.address);

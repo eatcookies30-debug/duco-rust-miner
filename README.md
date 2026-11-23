@@ -35,7 +35,7 @@ reports.
 |---|---|---|---|---|
 | `firmware/board_sketch` | Mega 2560 | 37,208 B (14%) | 1,513 B | 1,782 |
 | `firmware/board_sketch` | Nano 328P clone | 26,644 B (86%) | 1,513 B (73%) | 1,757 |
-| `firmware/i2c_rig` (master) | Mega 2560 | 13,652 B (5%) | 2,463 B | - |
+| `firmware/i2c_rig` (master) | Mega 2560 | 13,738 B (5%) | 2,463 B | - |
 | `firmware/baremetal` | Nano 328P clone | 4,552 B (14%) | 713 B | 763 |
 | `firmware/baremetal` | ATmega8 | 4,298 B (52%) | 729 B | not run |
 | `firmware/baremetal` | ATtiny45 | 3,968 B (97%) | 114 B | not run |

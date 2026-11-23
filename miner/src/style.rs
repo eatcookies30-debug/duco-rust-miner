@@ -186,6 +186,12 @@ fn local_offset() -> i64 {
 }
 
 pub fn prefix(rate: f64) -> String {
+    /* A rig with no board reporting yet sums to negative zero, and Rust prints
+       that as "-0.00". Nothing is mining until a rate is measured, so show a
+       plain zero. */
+    if rate <= 0.0 {
+        return "0.00 H/s".to_string();
+    }
     if rate >= 1000.0 {
         format!("{:.2} kH/s", rate / 1000.0)
     } else {
@@ -210,6 +216,15 @@ mod tests {
         let line = out.tag("rig3");
         assert!(line.contains("\x1b[45m"));
         assert!(line.ends_with(RESET));
+    }
+
+    #[test]
+    fn a_rig_that_has_not_mined_yet_reads_as_zero() {
+        /* Rust's float sum over an empty iterator is negative zero, which would
+           otherwise print as "-0.00 H/s" in the status line. */
+        let nothing: Vec<f64> = Vec::new();
+        assert_eq!(prefix(nothing.iter().sum()), "0.00 H/s");
+        assert_eq!(prefix(0.0), "0.00 H/s");
     }
 
     #[test]

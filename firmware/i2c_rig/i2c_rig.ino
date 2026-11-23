@@ -159,6 +159,7 @@ static void readSerialLines(void);   /* the miner's lines are handled in the loo
 static uint32_t jobsSent = 0;
 static uint32_t repliesOk = 0;
 static uint32_t repliesBad = 0;
+static uint32_t searchTimeouts = 0;
 static uint32_t bytesNacked = 0;
 static uint32_t sends = 0;
 
@@ -372,9 +373,12 @@ static void dispatch(Slave &s) {
   s.searchStart = millis();
   if (!sendJob(s, s.job, s.jobLen)) {
     /* The job never made it onto the bus. Say so, so the miner can hand this
-       board a fresh job instead of waiting out the whole allowance. */
+       board a fresh job instead of waiting out the whole allowance, and count
+       it as a bus failure so the STAT report shows it. */
     s.searching = false;
     s.jobLen = 0;
+    repliesBad++;
+    s.bad++;
     Serial.print("MISS ");
     Serial.print(s.address);
     Serial.println(" job never reached the board");
@@ -573,6 +577,7 @@ void loop() {
   unsigned long lastStat = millis();
   uint32_t reportedNacked = 0;
   uint32_t reportedBad = 0;
+  uint32_t reportedTimeouts = 0;
   uint8_t ledTick = 0;
 
   while (true) {
@@ -666,6 +671,7 @@ void loop() {
       if (millis() - s.searchStart > (unsigned long)MAX_SEARCH_MS) {
         s.searching = false;
         s.replyLen = 0;
+        searchTimeouts++;
         if (!poolDriven) {
           Serial.print("slave ");
           Serial.print(s.address);
@@ -748,9 +754,10 @@ void loop() {
        went wrong somewhere, and the miner shows it as a warning. */
     if (poolDriven && millis() - lastStat >= (unsigned long)STAT_SECONDS * 1000UL) {
       lastStat = millis();
-      if (bytesNacked != reportedNacked || repliesBad != reportedBad) {
+      if (bytesNacked != reportedNacked || repliesBad != reportedBad || searchTimeouts != reportedTimeouts) {
         reportedNacked = bytesNacked;
         reportedBad = repliesBad;
+        reportedTimeouts = searchTimeouts;
         uint8_t mining = 0;
         uint8_t worst = 0;
         for (uint8_t i = 0; i < slaveCount; i++)
@@ -764,7 +771,9 @@ void loop() {
         Serial.print(repliesOk);
         Serial.print(" shares, ");
         Serial.print(repliesBad);
-        Serial.print(" boards went silent, ");
+        Serial.print(" jobs never answered, ");
+        Serial.print(searchTimeouts);
+        Serial.print(" searches cut short, ");
         Serial.print(bytesNacked);
         Serial.print(" of ");
         Serial.print(sends);

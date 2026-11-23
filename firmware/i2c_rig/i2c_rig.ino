@@ -22,7 +22,7 @@
                    48 byte reply buffer plus a little bookkeeping: a Mega has
                    room for a dozen or more, a 328P board (Uno, Nano, Pro Mini)
                    acting as the master fits three and no more - six boards need
-                   2,469 bytes of the 2,048 bytes of RAM those chips have.
+                   2,504 bytes of the 2,048 bytes of RAM those chips have.
   RIG_BUS_KHZ      the bus speed in kHz. 100 is fine for short leads; use 50 if
                    the wires are long, many boards are hanging off them, or
                    replies start getting dropped.
@@ -161,6 +161,7 @@ static uint32_t jobsSent = 0;
 static uint32_t repliesOk = 0;
 static uint32_t repliesBad = 0;
 static uint32_t searchTimeouts = 0;
+static uint8_t lastTimeoutAddr = 0;
 static uint32_t bytesNacked = 0;
 static uint32_t sends = 0;
 
@@ -688,6 +689,15 @@ void loop() {
         s.searching = false;
         s.replyLen = 0;
         searchTimeouts++;
+        lastTimeoutAddr = s.address;
+        if (s.runningFromPool) {
+          /* The miner is waiting for this board's share. Telling it the search
+             was cut short lets the board get a fresh job at once instead of
+             sitting on a job it is no longer working on. */
+          Serial.print("MISS ");
+          Serial.print(s.address);
+          Serial.println(" search cut short");
+        }
         if (!poolDriven) {
           Serial.print("slave ");
           Serial.print(s.address);
@@ -789,7 +799,13 @@ void loop() {
         Serial.print(repliesBad);
         Serial.print(" jobs never answered, ");
         Serial.print(searchTimeouts);
-        Serial.print(" searches cut short, ");
+        Serial.print(" searches cut short");
+        if (lastTimeoutAddr) {
+          Serial.print(" (last on board ");
+          Serial.print(lastTimeoutAddr);
+          Serial.print(")");
+        }
+        Serial.print(", ");
         Serial.print(bytesNacked);
         Serial.print(" of ");
         Serial.print(sends);
